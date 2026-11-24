@@ -8,7 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// SecurityNotificationRow 站内通知持久投影（seq 为可重放游标，FR-172）。
+// SecurityNotificationRow 站内通知持久投影（seq 为可重放游标，安全治理）。
 type SecurityNotificationRow struct {
 	Seq         int64  `db:"seq"`
 	NoticeID    string `db:"notice_id"`
@@ -143,7 +143,7 @@ func AdminEmailsTx(ctx context.Context, tx *sqlx.Tx) ([]string, error) {
 	return emails, err
 }
 
-// InsertDeliveryTx は投递行を 1 件登録する。
+// InsertDeliveryTx 登记一条投递行。
 func InsertDeliveryTx(ctx context.Context, tx *sqlx.Tx, d SecurityNotificationDeliveryRow) error {
 	_, err := tx.NamedExecContext(ctx, `INSERT INTO security_notification_delivery
  (delivery_id,seq,channel,target_masked,state,attempts,last_error,next_retry_unix,created_unix,updated_unix)
@@ -151,15 +151,15 @@ func InsertDeliveryTx(ctx context.Context, tx *sqlx.Tx, d SecurityNotificationDe
 	return err
 }
 
-// NotificationTitleTx は seq の通知件名を返す（不在なら空文字）。
+// NotificationTitleTx 返回 seq 的通知主题（无则空串）。
 func NotificationTitleTx(ctx context.Context, tx *sqlx.Tx, seq int64) (string, error) {
 	var title string
 	err := tx.GetContext(ctx, &title, `SELECT title FROM security_notification WHERE seq=?`, seq)
 	return title, err
 }
 
-// RetryDeliveryTx は失敗/終態投递を手動再試行：attempts が targetVersion と一致する行だけ
-// pending+now に戻す（CAS、重複呼出は冪等に無変化）。戻り値は行が動いたか。
+// RetryDeliveryTx 失败/终态投递的手动重试：仅 attempts 与 targetVersion 一致的行
+// 回到 pending+now（CAS，重复调用幂等无变化）。返回行是否被移动。
 func RetryDeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string, expectAttempts, now int64) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE security_notification_delivery SET state='pending', next_retry_unix=?, updated_unix=?
@@ -171,14 +171,14 @@ func RetryDeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string, expect
 	return n > 0, err
 }
 
-// DeliveryTx は投递行を delivery_id で読む。
+// DeliveryTx 按 delivery_id 读取投递行。
 func DeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string) (SecurityNotificationDeliveryRow, error) {
 	var d SecurityNotificationDeliveryRow
 	err := tx.GetContext(ctx, &d, `SELECT * FROM security_notification_delivery WHERE delivery_id=?`, deliveryID)
 	return d, err
 }
 
-// ---- FR-172 QQ 渠道绑定 ----
+// ---- 安全治理 QQ 渠道绑定 ----
 
 // SetQQBindingTx 写入/覆盖用户 QQ openid 绑定。
 func SetQQBindingTx(ctx context.Context, tx *sqlx.Tx, userID int64, openid string, boundUnix int64) error {

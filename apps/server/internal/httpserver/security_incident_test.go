@@ -1,4 +1,4 @@
-// FR-168：事故处置动作生命周期与全实例业务写锁。
+// 安全治理：事故处置动作生命周期与全实例业务写锁。
 package httpserver_test
 
 import (
@@ -239,7 +239,7 @@ func TestIncidentRecoveryGateEndToEnd(t *testing.T) {
 	}
 }
 
-// FR-171/172：建案触发站内通知 → 游标分页 → 幂等确认。
+// 安全治理：建案触发站内通知 → 游标分页 → 幂等确认。
 func TestSecurityNotificationCursorEndToEnd(t *testing.T) {
 	e := newProtocolEnv(t)
 	token, _, _ := installAdmin(t, e, "adm-n", "admin-pass-123")
@@ -310,21 +310,21 @@ func TestSecurityNotificationCursorEndToEnd(t *testing.T) {
 	}
 }
 
-// FR-172：建案 → 管理员メール宛 smtp 投递行（脱敏）→ 派发结算。
+// 安全治理：建案 → 管理员邮箱 smtp 投递行（脱敏）→ 派发结算。
 func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 	e := newProtocolEnv(t)
 	token, _, _ := installAdmin(t, e, "adm-d", "admin-pass-123")
 	if _, err := e.db.Exec(`UPDATE user SET email='admin@example.com' WHERE username='adm-d'`); err != nil {
-		t.Fatalf("設定メール：%v", err)
+		t.Fatalf("配置邮箱：%v", err)
 	}
 
 	var opened api.SecurityCase
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
-		map[string]any{"title": "配送テスト案件", "severity": "high", "reason": "テスト"}, &opened); code != http.StatusOK {
+		map[string]any{"title": "配送测试案件", "severity": "high", "reason": "测试"}, &opened); code != http.StatusOK {
 		t.Fatalf("建案状態码 = %d", code)
 	}
 
-	// 投递登记：pending・脱敏宛先（実メールが出ないこと）。
+	// 投递登记：pending・脱敏收件地址（不发出真实邮件）。
 	var dels []struct {
 		DeliveryID   string `json:"deliveryId"`
 		Channel      string `json:"channel"`
@@ -340,7 +340,7 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("投递行異常: %+v", d)
 	}
 
-	// 配送失敗 → 仍 pending・attempts=1・退避で再試行予約。
+	// 投递失败 → 仍 pending・attempts=1・退避后预约重试。
 	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), func(ctx context.Context, to, subject, text string) error {
 		return fmt.Errorf("dial tcp: connection refused")
 	}, nil); err != nil || n != 1 {
@@ -359,7 +359,7 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("失敗结算異常: %+v", row)
 	}
 
-	// 再試行予約を現在に戻して成功送信 → accepted 終态、実宛先で送信されたこと。
+	// 重试预约拨回现在并成功发送 → accepted 终态、按真实地址发出。
 	if _, err := e.db.Exec(`UPDATE security_notification_delivery SET next_retry_unix=0 WHERE delivery_id=?`, d.DeliveryID); err != nil {
 		t.Fatalf("再試行予約：%v", err)
 	}
@@ -377,10 +377,10 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("終態 = %q，期望 accepted", row.State)
 	}
 
-	// SMTP 未設定(nil mailer)で新規投递は failed で可視化（成功を偽装しない）。
+	// SMTP 未配置(nil mailer)时新投递以 failed 可视化（不伪造成功）。
 	var opened2 api.SecurityCase
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
-		map[string]any{"title": "未設定案件", "severity": "low", "reason": "テスト2"}, &opened2); code != http.StatusOK {
+		map[string]any{"title": "未配置案件", "severity": "low", "reason": "测试2"}, &opened2); code != http.StatusOK {
 		t.Fatalf("建案2状態码 = %d", code)
 	}
 	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil, nil); err != nil || n != 1 {
@@ -392,7 +392,7 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 	}
 }
 
-// FR-171/172：案件既読水位（同版本冪等・超版本 409）と失败投递的手動再試行。
+// 安全治理：案件已读水位（同版本幂等・超版本 409）与失败投递的手动重试。
 func TestSecurityCaseReadAndDeliveryRetry(t *testing.T) {
 	e := newProtocolEnv(t)
 	token, _, _ := installAdmin(t, e, "adm-r", "admin-pass-123")
@@ -402,7 +402,7 @@ func TestSecurityCaseReadAndDeliveryRetry(t *testing.T) {
 
 	var opened api.SecurityCase
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
-		map[string]any{"title": "既読案件", "severity": "medium", "reason": "テスト"}, &opened); code != http.StatusOK {
+		map[string]any{"title": "已读案件", "severity": "medium", "reason": "测试"}, &opened); code != http.StatusOK {
 		t.Fatalf("建案状態码 = %d", code)
 	}
 
@@ -423,7 +423,7 @@ func TestSecurityCaseReadAndDeliveryRetry(t *testing.T) {
 		t.Fatalf("超版本既読 = %d，期望 409", code)
 	}
 
-	// 未設定 SMTP で failed 化 → 手動再試行で pending に戻る（attempts CAS）。
+	// SMTP 未配置置 failed → 手动重试回 pending（attempts CAS）。
 	if _, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil, nil); err != nil {
 		t.Fatalf("派发：%v", err)
 	}
@@ -441,12 +441,12 @@ func TestSecurityCaseReadAndDeliveryRetry(t *testing.T) {
 		t.Fatalf("再試行 = %d %+v，期望 pending", code, retried)
 	}
 	// 漂移 attempts → 409。
-	// 同一 targetVersion 重放は冪等（pending のまま 200）。
+	// 同一 targetVersion 重放幂等（保持 pending 返回 200）。
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/notification-deliveries/"+dels[0].DeliveryID+"/retry", token,
 		map[string]any{"targetVersion": dels[0].Attempts}, nil); code != http.StatusOK {
 		t.Fatalf("冪等重放 = %d，期望 200", code)
 	}
-	// 未曾一致した版本 → 409。
+	// 版本不匹配 → 409。
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/notification-deliveries/"+dels[0].DeliveryID+"/retry", token,
 		map[string]any{"targetVersion": 42}, nil); code != http.StatusConflict {
 		t.Fatalf("漂移再試行 = %d，期望 409", code)

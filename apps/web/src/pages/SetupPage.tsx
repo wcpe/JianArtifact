@@ -32,6 +32,7 @@ interface FormValues {
   username: string;
   password: string;
   confirmPassword: string;
+  claimTicket: string;
 }
 
 /** 口令强度评分（0–100）：长度达标为主，数字 / 大小写混合 / 符号各加成。 */
@@ -51,10 +52,11 @@ export function SetupPage() {
   const status = useAsync(getStatus, []);
   const [active, setActive] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [needClaim, setNeedClaim] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const form = useForm<FormValues>({
-    initialValues: { username: "", password: "", confirmPassword: "" },
+    initialValues: { username: "", password: "", confirmPassword: "", claimTicket: "" },
     validate: {
       username: (v) => (v.trim().length > 0 ? null : t("auth.username")),
       password: (v) => (v.length >= 8 ? null : t("auth.passwordRule")),
@@ -121,8 +123,14 @@ export function SetupPage() {
   const handleSubmit = form.onSubmit((values) => {
     setSubmitting(true);
     setError(null);
-    bootstrap(values.username, values.password)
-      .then(() => {
+    bootstrap(values.username, values.password, values.claimTicket || undefined)
+      .then((res) => {
+        if (res.next && res.next !== "authenticated") {
+          // 首个管理员仍须持认领票完成因子登记。
+          setNeedClaim(true);
+          setError(t("setup.claimRequired"));
+          return;
+        }
         setActive(2);
       })
       .catch(() => {
@@ -201,6 +209,13 @@ export function SetupPage() {
                     withAsterisk
                     {...form.getInputProps("confirmPassword")}
                   />
+                  {needClaim ? (
+                    <TextInput
+                      label={t("auth.claimTicket")}
+                      withAsterisk
+                      {...form.getInputProps("claimTicket")}
+                    />
+                  ) : null}
                   <Group justify="space-between" mt="sm">
                     <Button variant="default" onClick={() => setActive(0)}>
                       {t("setup.back")}

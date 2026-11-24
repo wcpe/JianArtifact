@@ -114,7 +114,7 @@ func (r *Runner) SetFormatImporter(importer domain.MigrationFormatImporter) {
 	r.importer = importer
 }
 
-// SetAdmission 装配私有候选准入与发起人主体构造（FR-169 §3.6 迁移写回）。
+// SetAdmission 装配私有候选准入与发起人主体构造。
 // principalFn 按任务发起人还原主体；返回错误即暂停该项写回。
 func (r *Runner) SetAdmission(a *domain.AdmissionService, sourceVersion string, principalFn func(task *repository.MigrationTask) (*auth.Principal, error)) {
 	r.admission, r.srcVersion, r.principalFn = a, sourceVersion, principalFn
@@ -591,7 +591,7 @@ func cargoMigrationOrder(item sourceItem) int {
 }
 
 // importItem 写回一个迁移制品。获准格式的 hosted 目标先经私有候选准入
-// 接收：封存→完整性裁定→提升净字节进格式导入器，提交后回写 published（FR-169 §3.6）。
+// 接收：封存→完整性裁定→提升净字节进格式导入器，提交后回写 published。
 func (r *Runner) importItem(ctx context.Context, item sourceItem, task *repository.MigrationTask) error {
 	var candRow repository.AdmissionCandidateRow
 	var candP *auth.Principal
@@ -666,7 +666,7 @@ func (r *Runner) admissionWrap(ctx context.Context, item sourceItem, task *repos
 	if err != nil || repo.Type != "hosted" || !domain.AdmissionFormatAllowed(repo.Format) {
 		return rc, nil
 	}
-	// FR-169 §3.6：每次提升复核原发起人身份与权限；无法证明可放行时拒绝。
+	// 安全治理 §3.6：每次提升复核原发起人身份与权限；无法证明可放行时拒绝。
 	p, err := r.principalFn(task)
 	if err != nil {
 		_ = rc.Close()

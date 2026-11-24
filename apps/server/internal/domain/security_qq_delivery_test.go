@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-172 QQ 渠道：绑定后通知产生 qq 投递行，mock 发送器验证 openid 解析与结果结算。
+// 安全治理 QQ 渠道：绑定后通知产生 qq 投递行，mock 发送器验证 openid 解析与结果结算。
 func TestSecurityQQDeliveryChannel(t *testing.T) {
 	db := mutationTestDB(t)
 	users := repository.NewUserRepo(db)
@@ -32,7 +32,7 @@ func TestSecurityQQDeliveryChannel(t *testing.T) {
 		t.Fatalf("绑定：%v", err)
 	}
 	if err := factors.Write(context.Background(), func(tx *sqlx.Tx) error {
-		_, e := EmitSecurityNotificationTx(context.Background(), tx, "security.test", "テスト通知", "{}", time.Now())
+		_, e := EmitSecurityNotificationTx(context.Background(), tx, "security.test", "测试通知", "{}", time.Now())
 		return e
 	}); err != nil {
 		t.Fatalf("发通知：%v", err)

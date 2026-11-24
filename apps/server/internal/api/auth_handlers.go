@@ -21,7 +21,7 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户名与口令不能为空")
 		return
 	}
-	// 强认证装配后，空库首管理员必须持 claim_install 票安装（规格 FR-167）；
+	// 强认证装配后，空库首管理员必须持 claim_install 票安装（规格 安全治理）；
 	// 未装配（因子密钥缺失）时降级为传统直签路径。
 	if h.mfa != nil && (req.ClaimTicket == nil || *req.ClaimTicket == "") {
 		auth.WriteError(c, http.StatusUnauthorized, "invalid_auth_challenge", "空库首管理员须持安装认领票")
@@ -126,6 +126,10 @@ func writeLoginOutcome(c *gin.Context, outcome *domain.AuthOutcome) {
 		resp.ChallengeToken = &outcome.ChallengeToken
 		exp := outcome.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00")
 		resp.ChallengeExpiresAt = &exp
+		if outcome.EnrollmentURI != "" {
+			// 恢复重绑挑战：附带一次展示的登记 URI，客户端走 enroll/confirm 完成重绑。
+			resp.EnrollmentUri = &outcome.EnrollmentURI
+		}
 	case domain.AuthNextClaimRequired:
 		resp.Next = ClaimRequired
 	default:

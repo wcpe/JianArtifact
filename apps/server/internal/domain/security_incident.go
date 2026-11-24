@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 	"regexp"
 )
 
-// FR-168：事故处置动作生命周期——预览→确认→执行，幂等、逐项结果、近期强认证由处理层裁决。
+// 安全治理：事故处置动作生命周期——预览→确认→执行，幂等、逐项结果、近期强认证由处理层裁决。
 
 const (
 	SecurityActionPreviewTTL = 5 * time.Minute
@@ -242,31 +243,123 @@ func (s *SecurityIncidentService) BusinessWriteVerdict(ctx context.Context, repo
 			return err
 		}
 		v.Locked = locked
+		restricted, err := s.targetRestrictedTx(ctx, tx, repo, pathPrefix)
+		if err != nil {
+			return err
+		}
+		v.Restricted = restricted
+		return nil
+	})
+	return v, err
+}
+
+// targetRestrictedTx 按 repository/path/version 三类目标裁决命中；读与写共用同一命中规则。
+func (s *SecurityIncidentService) targetRestrictedTx(ctx context.Context, tx *sqlx.Tx, repo, pathPrefix string) (bool, error) {
+	var rows []repository.IncidentRestriction
+	if err := tx.SelectContext(ctx, &rows, `SELECT restriction_id, kind, target, effects, state, version, effective_at, expires_at, action_id, lifted_action, created_at
+		FROM incident_restriction WHERE state='active' AND kind IN ('repository','path','version')`); err != nil {
+		return false, err
+	}
+	for _, r := range rows {
+		switch r.Kind {
+		case "repository":
+			if repo != "" && r.Target == repo {
+				return true, nil
+			}
+		case "path":
+			// 目标=仓库名:路径前缀
+			if i := strings.Index(r.Target, ":"); i > 0 && repo == r.Target[:i] && pathPrefix != "" && strings.HasPrefix(pathPrefix, r.Target[i+1:]) {
+				return true, nil
+			}
+		case "version":
+			// 目标=仓库名:路径@版本；读侧按路径前缀命中（版本裁决在字节层完成）。
+			if i := strings.Index(r.Target, ":"); i > 0 {
+				spec := r.Target[i+1:]
+				if j := strings.LastIndex(spec, "@"); j > 0 {
+					spec = spec[:j]
+				}
+				if repo == r.Target[:i] && pathPrefix != "" && strings.HasPrefix(pathPrefix, spec) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+// CommitWriteVerdictTx 提交事务内复核：调用方同一 tx 内重查实例写锁与目标限制，
+// 入口鉴权后新激活的裁决可拦截在途写入。命中分别返回 ErrIncidentWriteLocked /
+// ErrIncidentRestricted。仅服务写事务，读路径请走 BusinessReadVerdict。
+func (s *SecurityIncidentService) CommitWriteVerdictTx(ctx context.Context, tx *sqlx.Tx, repo string, pathPrefixes []string) error {
+	locked, err := repository.InstanceWriteLockedTx(ctx, tx, s.now().Unix())
+	if err != nil {
+		return err
+	}
+	if locked {
+		return ErrIncidentWriteLocked
+	}
+	for _, p := range pathPrefixes {
+		restricted, err := s.targetRestrictedTx(ctx, tx, repo, p)
+		if err != nil {
+			return err
+		}
+		if restricted {
+			return ErrIncidentRestricted
+		}
+	}
+	return nil
+}
+
+// BusinessReadVerdict 入口裁决（读/下载）：目标命中活动限制即拒绝；
+// 隔离的目标字节在解除前一律不可读。不检查实例写锁（写锁只管写）。
+func (s *SecurityIncidentService) BusinessReadVerdict(ctx context.Context, repo, pathPrefix string) (bool, error) {
+	var restricted bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var err error
+		restricted, err = s.targetRestrictedTx(ctx, tx, repo, pathPrefix)
+		return err
+	})
+	return restricted, err
+}
+
+// IncidentClientVerdict 裁决客户端 IP 是否落入活动的 ip_cidr 限制；
+// effect 语义：空/全集默认 login+publish+read，显式列表取子集。
+// read 场景用 "read"，写场景用 "publish"。命中返回 true。
+func (s *SecurityIncidentService) IncidentClientVerdict(ctx context.Context, clientIP netip.Addr, effect string) (bool, error) {
+	if !clientIP.IsValid() {
+		return false, nil
+	}
+	var hit bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
 		var rows []repository.IncidentRestriction
 		if err := tx.SelectContext(ctx, &rows, `SELECT restriction_id, kind, target, effects, state, version, effective_at, expires_at, action_id, lifted_action, created_at
-			FROM incident_restriction WHERE state='active' AND kind IN ('repository','path','version')`); err != nil {
+			FROM incident_restriction WHERE state='active' AND kind='ip_cidr'`); err != nil {
 			return err
 		}
 		for _, r := range rows {
-			switch r.Kind {
-			case "repository":
-				if repo != "" && r.Target == repo {
-					v.Restricted = true
-				}
-			case "path":
-				// 目标=仓库名:路径前缀
-				if i := strings.Index(r.Target, ":"); i > 0 && repo == r.Target[:i] && pathPrefix != "" && strings.HasPrefix(pathPrefix, r.Target[i+1:]) {
-					v.Restricted = true
-				}
-			case "version":
-				if r.Target != "" && repo != "" && pathPrefix != "" && strings.HasPrefix(r.Target, repo+":") && strings.HasPrefix(pathPrefix, strings.SplitN(r.Target, "@", 2)[0][len(repo)+1:]) {
-					v.Restricted = true
-				}
+			prefix, err := netip.ParsePrefix(r.Target)
+			if err != nil || !prefix.Contains(clientIP) {
+				continue
+			}
+			// effects 子集匹配：未声明（空）视为全集生效。
+			if r.Effects == "" || effectInList(r.Effects, effect) {
+				hit = true
+				return nil
 			}
 		}
 		return nil
 	})
-	return v, err
+	return hit, err
+}
+
+// effectInList 判断逗号分隔 effects 是否覆盖指定效果。
+func effectInList(effects, effect string) bool {
+	for _, e := range strings.Split(effects, ",") {
+		if strings.TrimSpace(e) == effect {
+			return true
+		}
+	}
+	return false
 }
 
 // BusinessWriteLocked 入口裁决：是否存在活跃实例业务写锁。
@@ -443,7 +536,7 @@ func validSecurityTarget(actionType string, tg SecurityTarget) bool {
 	return false
 }
 
-// ── 恢复隔离闸（FR-168 §3.4 最小切片）───────────────────────────────────────
+// ── 恢复隔离闸───────────────────────────────────────
 
 // BeginRestoreIsolation 恢复启动：normal → isolated，记恢复标识与原因。
 func (s *SecurityIncidentService) BeginRestoreIsolation(ctx context.Context, restoreID, reason string) error {
@@ -547,7 +640,7 @@ func (s *SecurityIncidentService) RecoveryIsolated(ctx context.Context) (bool, e
 	return isolated, err
 }
 
-// ── 风险调查案件（FR-171 §cases）───────────────────────────────────────────
+// ── 风险调查案件───────────────────────────────────────────
 
 // OpenSecurityCase 建案：管理员人工或规则检测入口共用；title/severity/reason 必填。
 func (s *SecurityIncidentService) OpenSecurityCase(ctx context.Context, p *auth.Principal, title, severity, reason string, links []repository.SecurityCaseLinkRow) (*repository.SecurityCaseRow, error) {
@@ -670,7 +763,7 @@ func (s *SecurityIncidentService) SecurityCaseLinks(ctx context.Context, caseID 
 	return out, err
 }
 
-// ── 安全通知（FR-172 站内通道）──────────────────────────────────────────────
+// ── 安全通知──────────────────────────────────────────────
 
 // SecurityNoticePage 游标补查页：items + nextCursor + hasMore + watermark 同源。
 type SecurityNoticePage struct {
@@ -689,7 +782,7 @@ func EmitSecurityNotificationTx(ctx context.Context, tx *sqlx.Tx, kind, title, p
 	if err != nil {
 		return 0, err
 	}
-	// 站外投递行も同一トランザクションで登録（通知と投递の原子性）。
+	// 站外投递行在同一事务登记（通知与投递的原子性）。
 	if err := emitDeliveriesForNotificationTx(ctx, tx, seq, now); err != nil {
 		return 0, err
 	}
@@ -927,7 +1020,7 @@ func (s *SecurityIncidentService) caseSection(ctx context.Context, p *auth.Princ
 	})
 }
 
-// ---- FR-172 QQ 渠道绑定 ----
+// ---- 安全治理 QQ 渠道绑定 ----
 
 var qqOpenidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
 

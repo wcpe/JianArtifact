@@ -124,6 +124,9 @@ func credentialAccountForProof(ctx context.Context, q sqlx.QueryerContext, p aut
 		args = append(args, p.TokenID, now)
 	case "":
 		// Basic 口令在锁外核验，以观察到的账号代次和当前通道资格重验。
+	case auth.KindInternal:
+		// 内部批写主体（迁移导入等）：服务端构造、身份绑定任务发起人，
+		// 仅按账号代次与活动状态重验，不核对会话/令牌行。
 	default:
 		return u, ErrCredentialRejected
 	}

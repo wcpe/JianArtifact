@@ -150,7 +150,7 @@ export function AppRoutes() {
               </RequireAuth>
             }
           />
-          {/* FR-171 风险调查页（仅管理员） */}
+          {/* 安全治理 风险调查页（仅管理员） */}
           <Route
             path="/security"
             element={

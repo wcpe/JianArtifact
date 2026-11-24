@@ -1,4 +1,4 @@
--- FR-168：恢复隔离闸与库内安全状态水位。
+-- 安全治理：恢复隔离闸与库内安全状态水位。
 -- recovery_gate：单实例单行；normal → isolated → reconciling → ready_for_review → normal，
 -- 任一核对失败回 isolated 并保留原因。
 CREATE TABLE IF NOT EXISTS recovery_gate (

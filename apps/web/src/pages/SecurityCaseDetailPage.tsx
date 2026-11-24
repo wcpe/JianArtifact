@@ -35,7 +35,7 @@ function MiniTable({ cols, rows }: { cols: { label: string; key: string }[]; row
   );
 }
 
-// FR-171 案件详情页：头部 + 关联 + 四栏（timeline/uploads/identity/actions-evidence）。
+// 安全治理 案件详情页：头部 + 关联 + 四栏（timeline/uploads/identity/actions-evidence）。
 export function SecurityCaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const [detail, setDetail] = useState<SecurityCaseDetail | null>(null);

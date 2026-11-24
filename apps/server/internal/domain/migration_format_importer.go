@@ -26,7 +26,7 @@ type MigrationAsset struct {
 	// 零值时各格式服务回退本地时间语义，与离线迁移一致。
 	SourceModified time.Time
 	// Principal 与 Source 是私有候选准入的发起主体与来源快照
-	// （FR-169 §3.6：迁移写回按原发起人逐项复核）；为零值时跳过准入。
+	// ；为零值时跳过准入。
 	Principal *auth.Principal
 	Source    auditctx.Source
 }

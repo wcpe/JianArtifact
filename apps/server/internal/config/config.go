@@ -80,7 +80,7 @@ const (
 	// 一键重启的能力配置（单独成组，理由同上）。
 	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
 	EnvRestartUnit = "JIAN_RESTART_UNIT" // 重启目标单元名；缺省 jianartifact
-	// FR-172 SMTP 通知通道：仅环境变量解析；HOST 空 = 通道未启用。
+	// 安全治理 SMTP 通知通道：仅环境变量解析；HOST 空 = 通道未启用。
 	EnvSMTPHost     = "JIAN_SMTP_HOST"     // SMTP 服务器主机；空 = 不启用 SMTP 投递
 	EnvSMTPPort     = "JIAN_SMTP_PORT"     // 端口；缺省 25（STARTTLS 由 smtp.SendMail 协商）
 	EnvSMTPFrom     = "JIAN_SMTP_FROM"     // 发件地址；空回落 JIAN_SMTP_USER
@@ -301,11 +301,11 @@ type Config struct {
 	TLSKey         string     // TLS PEM 私钥文件路径
 	OIDC           OIDCConfig // OIDC 身份源接入配置（Issuer 空 = 不启用）
 	LDAP           LDAPConfig // LDAP 身份源接入配置（URL 空 = 不启用）
-	SMTP           SMTPConfig // 通知邮件通道（FR-172；HOST 空 = 不启用）
-	QQ             QQConfig   // 通知 QQ 通道（FR-172；ENDPOINT 空 = 不启用）
+	SMTP           SMTPConfig // 通知邮件通道
+	QQ             QQConfig   // 通知 QQ 通道
 }
 
-// SMTPConfig 是安全通知邮件通道配置（FR-172）；
+// SMTPConfig 是安全通知邮件通道配置；
 // 口令只从环境变量解析，不落库、不打印、不进审计。
 type SMTPConfig struct {
 	Host     string // 服务器主机；空 = 未启用
@@ -318,14 +318,14 @@ type SMTPConfig struct {
 // Enabled 报告 SMTP 投递是否启用。
 func (c SMTPConfig) Enabled() bool { return c.Host != "" }
 
-// QQConfig 是安全通知 QQ 通道配置（FR-172）；公式 API 整備までは
-// 适配端点（薄 HTTP 适配器）へ POST する形を取る。未設定は渠道无効・投递は failed 可視化。
+// QQConfig 是安全通知 QQ 通道配置；官方 API 就绪前
+// 采用适配端点（薄 HTTP 适配器）POST。未配置则渠道无效、投递以 failed 可视化。
 type QQConfig struct {
 	Endpoint string
 	Token    string
 }
 
-// Enabled は QQ 渠道が有効か（端点設定済み）。
+// Enabled 报告 QQ 渠道是否有效（端点已配置）。
 func (c QQConfig) Enabled() bool { return c.Endpoint != "" }
 
 // LDAPConfig 是 LDAP 目录接入配置（见 ADR-0029）；
@@ -480,12 +480,12 @@ func Load() (*Config, error) {
 	}, nil
 }
 
-// qqConfig 解析 FR-172 QQ 通知通道。
+// qqConfig 解析 安全治理 QQ 通知通道。
 func qqConfig() QQConfig {
 	return QQConfig{Endpoint: strings.TrimSpace(os.Getenv(EnvQQEndpoint)), Token: os.Getenv(EnvQQToken)}
 }
 
-// smtpConfig 解析 FR-172 SMTP 通知通道；端口非法/非正回落 25。
+// smtpConfig 解析 安全治理 SMTP 通知通道；端口非法/非正回落 25。
 func smtpConfig() SMTPConfig {
 	port, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvSMTPPort)))
 	if err != nil || port <= 0 || port > 65535 {

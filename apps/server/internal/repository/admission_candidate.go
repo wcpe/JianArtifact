@@ -136,7 +136,7 @@ func AdmissionPublishGrantTx(ctx context.Context, tx *sqlx.Tx, repoID, userID in
 }
 
 // GetAnyTx 按操作号取候选（管理员裁决用，不限定发起者）。
-// SumPendingTx 统计未决候选占用：接收中/已封存/待审的字节与条数（FR-169 私有容量上限）。
+// SumPendingTx 统计未决候选占用：接收中/已封存/待审的字节与条数。
 func (r *AdmissionCandidateRepo) SumPendingTx(ctx context.Context, tx *sqlx.Tx, repositoryID int64) (repoBytes, totalBytes int64, repoCount, totalCount int64, err error) {
 	row := tx.QueryRowxContext(ctx, `SELECT COALESCE(SUM(size_bytes),0), COUNT(*) FROM private_admission_candidate WHERE state IN ('receiving','staged','awaiting_review') AND repository_id=?`, repositoryID)
 	if err = row.Scan(&repoBytes, &repoCount); err != nil {

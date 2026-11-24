@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,21 +13,24 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-172 站外投递派发：security_notification_delivery の持久行を逐次処理する。
-// 送信はトランザクション外で行い、結果だけを次のトランザクションで確定する
-// （DB トランザクション内でネットワーク待ちしない）。
-// SMTP 未設定・QQ 未整備の渠道は failed+原因記録で見える化し、成功を偽装しない。
+// emailAddrPattern 匹配错误串中残留的 user@host 形态地址用于脱敏。
+var emailAddrPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+
+// 安全治理站外投递派发：逐条处理 security_notification_delivery 的持久行。
+// 发送在事务外执行，仅结果在下一事务内结算
+// （DB 事务内不等待网络）。
+// SMTP 未配置、QQ 未就绪的渠道以 failed+原因记录可视化，不伪造成功。
 
 const (
-	// deliveryMaxAttempts は永続再試行の上限。超過で failed 終態。
+	// deliveryMaxAttempts 为持久重试上限；超过即 failed 终态。
 	deliveryMaxAttempts = 8
-	// deliveryAttemptTimeout は 1 回の送信試行の上限（30 秒初回予算に合わせる）。
+	// deliveryAttemptTimeout 为单次发送尝试上限（与 30 秒首次预算对齐）。
 	deliveryAttemptTimeout = 30 * time.Second
-	// deliveryRetryBase は再試行間隔の基数（秒）。attempts 回に比例して線形に伸ばす。
+	// deliveryRetryBase 为重试间隔基数（秒），随 attempts 线性增长。
 	deliveryRetryBase = 60
 )
 
-// maskEmail は保存用の脱敏表現を返す（例: h***@example.com）。配送先の実値は永続化しない。
+// maskEmail 返回脱敏表示（例: h***@example.com）；真实收件地址不持久化。
 func maskEmail(email string) string {
 	local, domainPart, ok := strings.Cut(email, "@")
 	if !ok {
@@ -38,10 +42,10 @@ func maskEmail(email string) string {
 	return local[:1] + "***@" + domainPart
 }
 
-// emitDeliveriesForNotificationTx は通知 seq に紐づく站外投递行を同じ写トランザクションで登録する。
-// SMTP：現時点の有効管理者の登録メール宛に 1 人 1 行（宛先は脱敏のみ保存）。
-// QQ：qq 绑定済みの管理者宛に 1 人 1 行（宛先は qq:u<uid> の不透明識別子のみ保存、
-// 実 openid は送信時に绑定表から復元する）。
+// emitDeliveriesForNotificationTx 在同一写事务内登记与通知 seq 关联的站外投递行。
+// SMTP：为当前全部有效管理员的注册邮箱各登记 1 行（收件地址仅脱敏保存）。
+// QQ：为已绑定 qq 的管理员各登记 1 行（收件地址仅保存 qq:u<uid> 不透明标识，
+// 真实 openid 在发送时从绑定表还原）。
 func emitDeliveriesForNotificationTx(ctx context.Context, tx *sqlx.Tx, seq int64, now time.Time) error {
 	emails, err := repository.AdminEmailsTx(ctx, tx)
 	if err != nil {
@@ -75,12 +79,12 @@ func emitDeliveriesForNotificationTx(ctx context.Context, tx *sqlx.Tx, seq int64
 	return nil
 }
 
-// qqMaskedTarget は QQ 投递行の脱敏宛先表現（user_id 識別子のみ、openid を含まない）。
+// qqMaskedTarget 是 QQ 投递行的脱敏收件表示（仅 user_id 标识，不含 openid）。
 func qqMaskedTarget(userID int64) string {
 	return "qq:u" + strconv.FormatInt(userID, 10)
 }
 
-// qqTargetUserID は脱敏宛先から user_id を復元する。形式不正は false。
+// qqTargetUserID 从脱敏收件地址还原 user_id；格式非法返回 false。
 func qqTargetUserID(masked string) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimPrefix(masked, "qq:u"), 10, 64)
 	if err != nil || id <= 0 || !strings.HasPrefix(masked, "qq:u") {
@@ -89,16 +93,16 @@ func qqTargetUserID(masked string) (int64, bool) {
 	return id, true
 }
 
-// NotificationMailer は 1 通の送信を行う差し込み関数（SMTP 実装は装配層）。
-// ctx に試行タイムアウトが載る。
+// NotificationMailer 是发送单封邮件的注入函数（SMTP 实现在装配层）；
+// ctx 携带单次尝试超时。
 type NotificationMailer func(ctx context.Context, to, subject, text string) error
 
-// NotificationQQSender は QQ チャンネル 1 件の送信を行う差し込み関数
-// （公式 API アダプタは装配層；未整備なら nil で恒久的失敗可視化）。
+// NotificationQQSender 是发送单条 QQ 消息的注入函数
+// （官方 API 适配器在装配层；未就绪则传 nil，以永久失败可视化）。
 type NotificationQQSender func(ctx context.Context, openid, title, text string) error
 
-// DispatchPendingNotifications は到期待投递行を认领→送信→结算する。处理件数を返す。
-// mailer/qq が nil（渠道未設定）でも待機行を failed で可視化するため呼び出される。
+// DispatchPendingNotifications 将到期待投递行认领→发送→结算，返回处理件数。
+// mailer/qq 为 nil（渠道未配置）也会被调用——待投递行以 failed 可视化。
 func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Context, mailer NotificationMailer, qq NotificationQQSender) (int, error) {
 	now := s.now().Unix()
 	var claimed []repository.SecurityNotificationDeliveryRow
@@ -110,8 +114,8 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 	if err != nil || len(claimed) == 0 {
 		return 0, err
 	}
-	// 宛先は脱敏のみ保存しているため、送信時に管理者メール一覧から復元する。
-	// 脱敏形式と現在のメール一覧が一致しない（退会・変更）は target_gone で失敗可視化。
+	// 收件地址仅脱敏保存，发送时从当前管理员邮箱列表还原。
+	// 脱敏形式与当前邮箱列表不一致（注销/变更）以 target_gone 失败可视化。
 	var emails []string
 	err = s.repo.Read(ctx, func(tx *sqlx.Tx) error {
 		var e error
@@ -125,7 +129,7 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 	for _, e := range emails {
 		realTarget[maskEmail(e)] = e
 	}
-	// QQ：宛先復元は送信ごとに绑定表から行う（解绑された宛先は target_gone）。
+	// QQ：收件地址在每次发送时从绑定表还原（已解绑的地址为 target_gone）。
 	qqOpenid := func(uid int64) string {
 		var openid string
 		if err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
@@ -141,7 +145,7 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 	for _, d := range claimed {
 		attempts := d.Attempts + 1
 		var sendErr error
-		permanent := false // 設定起因の恒久的失敗は再試行せず即 failed（可視化して止める）
+		permanent := false // 配置导致的永久失败不重试，直接 failed（可视化后停止）
 		target := realTarget[d.TargetMasked]
 		switch {
 		case d.Channel == "qq":
@@ -158,7 +162,7 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 				} else {
 					actx, cancel := context.WithTimeout(ctx, deliveryAttemptTimeout)
 					title := "[JianArtifact 安全通知] " + notificationTitleOf(ctx, s, d.Seq)
-					sendErr = qq(actx, openid, title, title+"\n\n安全コンソール（/security）で確認してください。")
+					sendErr = qq(actx, openid, title, title+"\n\n请在安全控制台（/security）查看。")
 					cancel()
 				}
 			}
@@ -169,7 +173,7 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 		default:
 			actx, cancel := context.WithTimeout(ctx, deliveryAttemptTimeout)
 			subject := "[JianArtifact 安全通知] " + notificationTitleOf(ctx, s, d.Seq)
-			body := subject + "\n\n安全コンソール（/security）で確認してください。"
+			body := subject + "\n\n请在安全控制台（/security）查看。"
 			sendErr = mailer(actx, target, subject, body)
 			cancel()
 		}
@@ -178,7 +182,8 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 		}
 		errStrVal := ""
 		if sendErr != nil {
-			errStrVal = sendErr.Error()
+			// 中继错误串可能携带完整收件地址；与投递行同口径脱敏后落库。
+			errStrVal = sanitizeDeliveryErr(sendErr.Error(), target)
 			if len(errStrVal) > 200 {
 				errStrVal = errStrVal[:200]
 			}
@@ -194,12 +199,25 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 	return done, nil
 }
 
+// sanitizeDeliveryErr 对落库的中继错误串脱敏：以收件目标为中心，
+// 先整体替换精确目标，再对残留的 user@host 形态地址逐项脱敏。
+func sanitizeDeliveryErr(msg, target string) string {
+	if target != "" {
+		masked := target
+		if strings.Contains(target, "@") {
+			masked = maskEmail(target)
+		}
+		msg = strings.ReplaceAll(msg, target, masked)
+	}
+	return emailAddrPattern.ReplaceAllStringFunc(msg, func(m string) string { return maskEmail(m) })
+}
+
 type strErr string
 
 func (e strErr) Error() string { return string(e) }
 func errStr(s string) error    { return strErr(s) }
 
-// notificationTitleOf は通知件名を取得する（件名不在なら kind を返す）。
+// notificationTitleOf 取通知主题（无主题回退 kind）。
 func notificationTitleOf(ctx context.Context, s *SecurityIncidentService, seq int64) string {
 	var title string
 	if err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {

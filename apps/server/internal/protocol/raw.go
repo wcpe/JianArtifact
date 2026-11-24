@@ -301,7 +301,7 @@ func (h *RawHandler) Put(c *gin.Context) {
 		}
 		return
 	}
-	// 准入管线（FR-169）：hosted 仓库的写入先私有候选、隔离裁定，净字节再经原发布链提升。
+	// 准入管线：hosted 仓库的写入先私有候选、隔离裁定，净字节再经原发布链提升。
 	var candidateRow repository.AdmissionCandidateRow
 	var candidatePrincipal *auth.Principal
 	var candidateRC io.ReadCloser
@@ -802,7 +802,7 @@ func cleanArtifactPath(raw string) string {
 	return s
 }
 
-// admissionService 提交托管 Raw 写入到私有候选准入管线（FR-169）。
+// admissionService 提交托管 Raw 写入到私有候选准入管线。
 type admissionService interface {
 	IntakeCandidate(ctx context.Context, principal *auth.Principal, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error)
 	PromoteBytes(ctx context.Context, row repository.AdmissionCandidateRow) (io.ReadCloser, int64, error)

@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-168：事故处置动作——预览/确认执行；执行须近期强认证（step_up 水位）。
+// 安全治理：事故处置动作——预览/确认执行；执行须近期强认证（step_up 水位）。
 
 // PreviewSecurityAction 预览动作并持久化（幂等键回放，摘要冲突 409）。
 func (h *Handlers) PreviewSecurityAction(c *gin.Context) {
@@ -154,11 +154,37 @@ func (h *Handlers) IncidentWriteLockGate() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
+		readOnly := c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions
+		effect := "publish"
+		if readOnly {
+			effect = "read"
+		}
+		// 客户端网段限制：ip_cidr 目标对全部路由生效（含登录等安全出口外的流量）。
+		if clientIP := c.ClientIP(); clientIP != "" {
+			if addr, perr := netip.ParseAddr(clientIP); perr == nil {
+				if hit, verr := h.incident.IncidentClientVerdict(c.Request.Context(), addr, effect); verr == nil && hit {
+					auth.WriteError(c, http.StatusForbidden, "incident_restricted", "客户端网段受事故限制约束")
+					c.Abort()
+					return
+				}
+			}
+		}
+		repo, prefix := incidentTargetOf(c.Request.Method, path)
+		if readOnly {
+			// 读/下载侧：目标受 repository/path/version 限制即拒绝，隔离字节不可读。
+			restricted, rerr := h.incident.BusinessReadVerdict(c.Request.Context(), repo, prefix)
+			if rerr != nil {
+				c.Next()
+				return
+			}
+			if restricted {
+				auth.WriteError(c, http.StatusForbidden, "incident_restricted", "目标受事故限制约束")
+				c.Abort()
+				return
+			}
 			c.Next()
 			return
 		}
-		repo, prefix := incidentTargetOf(c.Request.Method, path)
 		v, err := h.incident.BusinessWriteVerdict(c.Request.Context(), repo, prefix)
 		if err != nil {
 			c.Next()
@@ -180,10 +206,7 @@ func (h *Handlers) IncidentWriteLockGate() gin.HandlerFunc {
 
 // incidentTargetOf 从请求目标粗解出仓库名与路径前缀（入口级裁决；
 // 权威裁决在最终写事务内，本层只做已知名称的快速拦截）。
-func incidentTargetOf(method, path string) (repo, prefix string) {
-	if method != http.MethodPut && method != http.MethodPost && method != http.MethodDelete && method != http.MethodPatch {
-		return "", ""
-	}
+func incidentTargetOf(_ string, path string) (repo, prefix string) {
 	p := strings.TrimPrefix(path, "/")
 	if strings.HasPrefix(p, "api/v1/repositories/") {
 		rest := strings.TrimPrefix(p, "api/v1/repositories/")
@@ -203,7 +226,16 @@ func incidentTargetOf(method, path string) (repo, prefix string) {
 		}
 		return rest, ""
 	}
-	// 其余协议入口（npm/cargo/oci 等自有挂载）：首段按仓库名试探。
+	// OCI 分发路由固定挂 /v2/{repo}/...：跳过低层版本前缀取真实仓库名，
+	// 否则仓库限制永远无法命中 OCI 入口。
+	if strings.HasPrefix(p, "v2/") {
+		rest := strings.TrimPrefix(p, "v2/")
+		if i := strings.Index(rest, "/"); i > 0 {
+			return rest[:i], rest[i+1:]
+		}
+		return rest, ""
+	}
+	// 其余协议入口（npm/cargo 等自有挂载）：首段按仓库名试探。
 	if i := strings.Index(p, "/"); i > 0 {
 		return p[:i], p[i+1:]
 	}
@@ -311,7 +343,7 @@ func (h *Handlers) ConfirmRecovery(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// ── FR-171 风险调查案件 ────────────────────────────────────────────────────
+// ── 安全治理 风险调查案件 ────────────────────────────────────────────────────
 
 func caseRowToModel(r *repository.SecurityCaseRow) SecurityCase {
 	out := SecurityCase{CaseId: r.CaseID, Title: r.Title, State: SecurityCaseState(r.State),
@@ -433,7 +465,7 @@ func (h *Handlers) ListSecurityCaseLinks(c *gin.Context, caseID string) {
 	c.JSON(http.StatusOK, out)
 }
 
-// ── FR-172 站内安全通知 ────────────────────────────────────────────────────
+// ── 安全治理 站内安全通知 ────────────────────────────────────────────────────
 
 func (h *Handlers) ListSecurityNotifications(c *gin.Context, params ListSecurityNotificationsParams) {
 	c.Header("Cache-Control", "private, no-store")
@@ -520,7 +552,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context, params ListNotific
 	c.JSON(http.StatusOK, out)
 }
 
-// ListSecurityFindings は規則検出命中を新しい順で返す（FR-171）。
+// ListSecurityFindings 按新到旧返回规则检测命中。
 func (h *Handlers) ListSecurityFindings(c *gin.Context, params ListSecurityFindingsParams) {
 	c.Header("Cache-Control", "private, no-store")
 	p, ok := requireAdmin(c)
@@ -585,7 +617,7 @@ func (h *Handlers) MarkSecurityCaseRead(c *gin.Context, caseID string) {
 	c.JSON(http.StatusOK, gin.H{"readUnix": row.ReadUnix, "seenVersion": row.SeenVersion})
 }
 
-// RetryNotificationDelivery 失败投递の手動再試行（attempts=CAS）。
+// RetryNotificationDelivery 失败投递的手动重试（attempts=CAS）。
 func (h *Handlers) RetryNotificationDelivery(c *gin.Context, deliveryID string) {
 	c.Header("Cache-Control", "private, no-store")
 	p, ok := requireAdmin(c)

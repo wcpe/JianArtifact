@@ -477,3 +477,14 @@ func HasActiveTotpFactorTx(ctx context.Context, tx *sqlx.Tx, userID int64) (bool
 	}
 	return fid != "", err
 }
+
+// HasPendingTotpFactorTx 报告是否存在待登记因子（恢复码已消费、确认未完成）。
+func HasPendingTotpFactorTx(ctx context.Context, tx *sqlx.Tx, userID int64) (bool, error) {
+	var fid string
+	err := tx.GetContext(ctx, &fid,
+		`SELECT factor_id FROM security_totp_factor WHERE user_id=? AND state='enrollment_pending' LIMIT 1`, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return fid != "", err
+}

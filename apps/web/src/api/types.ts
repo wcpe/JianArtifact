@@ -27,7 +27,25 @@ export type UserGroupMemberList = Schemas["UserGroupMemberList"];
 export type CreateUserGroupRequest = Schemas["CreateUserGroupRequest"];
 export type UpdateUserGroupRequest = Schemas["UpdateUserGroupRequest"];
 export type AddUserGroupMemberRequest = Schemas["AddUserGroupMemberRequest"];
-export type LoginResponse = Schemas["LoginResponse"];
+export type LoginResponse = Schemas["LoginResponse"] & {
+  /** 登录去向：authenticated 直落会话；mfa_required/claim_required 进挑战流程。 */
+  next?: "authenticated" | "mfa_required" | "claim_required";
+  challengeToken?: string;
+  challengeId?: string;
+  enrollmentUri?: string;
+};
+/** 因子登记挑战：受控认领/恢复重绑返回，登记 URI 只展示一次。 */
+export interface MfaEnrollChallenge {
+  challengeId: string;
+  challengeToken: string;
+  enrollmentUri: string;
+  expiresAt: string;
+}
+
+/** 因子确认后下发的一次性恢复码批次。 */
+export interface MfaRecoveryCodes {
+  recoveryCodes: string[];
+}
 export type AssetSummary = Schemas["AssetSummary"];
 export type AssetList = Schemas["AssetList"];
 export type BatchDeleteAssetsRequest = Schemas["BatchDeleteAssetsRequest"];

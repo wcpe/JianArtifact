@@ -35,7 +35,7 @@ var cargoNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 type CargoService struct {
 	assets    *AssetService
 	repos     *RepositoryService
-	admission *AdmissionService // 私有候选准入（FR-169；nil 走原直发路径）
+	admission *AdmissionService // 私有候选准入
 }
 
 // NewCargoService 构造 Cargo sparse 领域服务。
@@ -100,7 +100,7 @@ func (s *CargoService) PublishWithGuard(ctx context.Context, repoName string, r 
 	return s.publishCargo(ctx, repoName, r, guard, time.Time{}, false, nil)
 }
 
-// PublishViaAdmission 经私有候选准入发布（FR-169）：crate 字节先私有接收、完整性裁定，
+// PublishViaAdmission 经私有候选准入发布：crate 字节先私有接收、完整性裁定，
 // 封存字节再进入暂存批量提交；迁移等内部导入路径仍走 PublishWithGuard。
 func (s *CargoService) PublishViaAdmission(ctx context.Context, principal *auth.Principal, repoName string, r io.Reader, guard CargoPublishGuard) (*CargoPublishResult, error) {
 	return s.publishCargo(ctx, repoName, r, guard, time.Time{}, false, principal)
@@ -169,7 +169,7 @@ func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.R
 	if _, err := crateFile.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	// 准入管线（FR-169）：crate 是客户端字节，先私有接收→完整性裁定→封存字节入暂存。
+	// 准入管线：crate 是客户端字节，先私有接收→完整性裁定→封存字节入暂存。
 	var candRow repository.AdmissionCandidateRow
 	crateReader := io.Reader(crateFile)
 	if s.admission != nil && admissionPrincipal != nil && !quotaExempt {

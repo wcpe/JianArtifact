@@ -195,6 +195,8 @@ type AssetService struct {
 	upstream  *upstream.Client
 	mutator   *AssetMutationCoordinator
 	writeGate BusinessWriteGate
+	// incidentVerdictTx 注入提交事务内的事故写裁决；nil 保持兼容行为。
+	incidentVerdictTx func(tx *sqlx.Tx, repo string, pathPrefixes []string) error
 	// users 供发布完成事务内重查凭据当前状态；nil 保持兼容行为。
 	users *repository.UserRepo
 	// repoSvc 供发布完成事务内复核 ACL 授权；nil 保持兼容行为。
@@ -236,6 +238,12 @@ func (s *AssetService) SetCredentialRevalidator(users *repository.UserRepo) { s.
 
 // SetRepositoryService 注入仓库服务，供发布完成事务内复核主体对目标仓库的实时 ACL。
 func (s *AssetService) SetRepositoryService(r *RepositoryService) { s.repoSvc = r }
+
+// SetIncidentVerdictTx 注入提交事务内的事故写裁决（实例写锁 + 目标限制复核）；
+// nil 保持兼容行为不额外复核。注入点必须在 NewAssetService 之后、第一个请求之前。
+func (s *AssetService) SetIncidentVerdictTx(f func(tx *sqlx.Tx, repo string, pathPrefixes []string) error) {
+	s.incidentVerdictTx = f
+}
 
 // SetStorageQuotaCheck 注入仓库级存储配额的提交点权威复检。
 // nil 表示不做存储配额判定（兼容既有装配与只读部署）。
@@ -637,6 +645,21 @@ func (s *AssetService) PublishAssetsWithEnvelope(repoName string, after []*repos
 	items, err := s.publishMutationItems(repo, after)
 	if err != nil {
 		return envelope.OperationID, err
+	}
+	if s.incidentVerdictTx != nil {
+		// 提交事务内复核事故裁决：入口鉴权后到字节提交前若写锁激活或目标被限制，
+		// 在途发布不得把字节落成公开（入口层只是快速拦截，这里是权威裁决点）。
+		paths := make([]string, 0, len(items))
+		for _, item := range items {
+			paths = append(paths, item.Path)
+		}
+		inner := hook
+		hook = func(tx *sqlx.Tx) error {
+			if err := s.incidentVerdictTx(tx, repoName, paths); err != nil {
+				return err
+			}
+			return inner(tx)
+		}
 	}
 	if err := s.mutator.ApplyWithOutboxAndHook(items, envelope, hook); err != nil {
 		return envelope.OperationID, err

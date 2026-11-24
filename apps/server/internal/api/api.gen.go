@@ -4316,7 +4316,7 @@ type PrivateAdmissionDecisionRequest struct {
 	// Action 批准提升为公开资产或驳回候选。
 	Action PrivateAdmissionDecisionRequestAction `json:"action"`
 
-	// ConfirmationToken 同一主体经 preview 取得的短效单次确认令牌（FR-170）；令牌绑定人、动作、版本、摘要、规则与有效期。
+	// ConfirmationToken 同一主体经 preview 取得的短效单次确认令牌；令牌绑定人、动作、版本、摘要、规则与有效期。
 	ConfirmationToken string `json:"confirmationToken"`
 	Reason            string `json:"reason"`
 }
@@ -6773,7 +6773,7 @@ type ServerInterface interface {
 	// GetSecurityCaseSection 案件四栏分页（timeline/uploads/identity/actions-evidence）
 	// (GET /api/v1/security/cases/{caseId}/{section})
 	GetSecurityCaseSection(c *gin.Context, caseId string, section GetSecurityCaseSectionParamsSection, params GetSecurityCaseSectionParams)
-	// ListSecurityFindings 规则命中清单（FR-171 检测投影）
+	// ListSecurityFindings 规则命中清单
 	// (GET /api/v1/security/findings)
 	ListSecurityFindings(c *gin.Context, params ListSecurityFindingsParams)
 	// ListEvidenceHolds 保全持有清单（管理员只读）
@@ -6794,7 +6794,7 @@ type ServerInterface interface {
 	// DeleteSecurityQQBinding 解绑 QQ openid
 	// (DELETE /api/v1/security/qq-bindings/{userId})
 	DeleteSecurityQQBinding(c *gin.Context, userId int64)
-	// SetSecurityQQBinding 绑定管理员账号与 QQ openid（FR-172 通知渠道）
+	// SetSecurityQQBinding 绑定管理员账号与 QQ openid
 	// (PUT /api/v1/security/qq-bindings/{userId})
 	SetSecurityQQBinding(c *gin.Context, userId int64)
 	// GetRecoveryGate 恢复隔离闸状态（管理员可读）

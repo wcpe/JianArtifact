@@ -49,6 +49,8 @@ import type {
   ConnectionStatus,
   EnabledFormats,
   LoginResponse,
+  MfaEnrollChallenge,
+  MfaRecoveryCodes,
   MigrationConflictPolicy,
   OperationsDashboard,
   DownloadClientRanking,
@@ -207,19 +209,51 @@ export function getEnabledFormats(): Promise<EnabledFormats> {
   return request<EnabledFormats>("/formats/enabled");
 }
 
-/** 空库自举：创建首个管理员并返回会话令牌。 */
-export function bootstrap(username: string, password: string): Promise<LoginResponse> {
+/** 空库自举：创建首个管理员并返回会话令牌；装配强认证后须附安装认领票。 */
+export function bootstrap(username: string, password: string, claimTicket?: string): Promise<LoginResponse> {
   return request<LoginResponse>("/auth/bootstrap", {
+    method: "POST",
+    body: claimTicket ? { username, password, claimTicket } : { username, password },
+  });
+}
+
+/** 登录：校验凭据并返回会话令牌与用户；next=mfa_required/claim_required 时进挑战流程。 */
+export function login(username: string, password: string): Promise<LoginResponse> {
+  return request<LoginResponse>("/auth/login", {
     method: "POST",
     body: { username, password },
   });
 }
 
-/** 登录：校验凭据并返回会话令牌与用户。 */
-export function login(username: string, password: string): Promise<LoginResponse> {
-  return request<LoginResponse>("/auth/login", {
+/** 兑现 login_mfa 挑战：OTP 命中换完整会话。 */
+export function verifyLoginMfa(challengeToken: string, otp: string): Promise<LoginResponse> {
+  return request<LoginResponse>("/auth/mfa/verify", {
     method: "POST",
-    body: { username, password },
+    body: { challengeToken, otp },
+  });
+}
+
+/** 凭 login_mfa 挑战 + 恢复码换 factor_recover 重绑登记（返回新登记 URI）。 */
+export function recoverLoginMfa(challengeToken: string, recoveryCode: string): Promise<MfaEnrollChallenge> {
+  return request<MfaEnrollChallenge>("/auth/mfa/recover", {
+    method: "POST",
+    body: { challengeToken, recoveryCode },
+  });
+}
+
+/** 受控认领：口令 + 认领票换 factor_enroll 登记挑战。 */
+export function claimMfaEnroll(username: string, password: string, claimTicket: string): Promise<MfaEnrollChallenge> {
+  return request<MfaEnrollChallenge>("/auth/mfa/claim", {
+    method: "POST",
+    body: { username, password, claimTicket },
+  });
+}
+
+/** 用首枚 OTP 确认因子登记并领取恢复码批次。 */
+export function confirmMfaEnroll(challengeToken: string, otp: string, claimTicket?: string): Promise<MfaRecoveryCodes> {
+  return request<MfaRecoveryCodes>("/auth/mfa/enroll/confirm", {
+    method: "POST",
+    body: claimTicket ? { challengeToken, otp, claimTicket } : { challengeToken, otp },
   });
 }
 
@@ -1835,7 +1869,7 @@ export function runMaintenanceJob(name: string): Promise<{ name: string; started
   return request(`/maintenance/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
 }
 
-/* ── FR-171 风险调查（安全事件队列 + 案件） ─────────────────────────── */
+/* ── 安全治理 风险调查（安全事件队列 + 案件） ─────────────────────────── */
 
 export interface SecurityEvent {
   eventId: string;
@@ -1882,7 +1916,7 @@ export interface SecurityEventQuery {
   limit?: number;
 }
 
-/** 安全事件队列（关联维度即查询参数；FR-171）。 */
+/** 安全事件队列（关联维度即查询参数；安全治理）。 */
 export function getSecurityEvents(q: SecurityEventQuery): Promise<SecurityEventPage> {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(q)) {
@@ -1948,7 +1982,7 @@ export function getSecurityFindings(limit = 50): Promise<SecurityFinding[]> {
   return request<SecurityFinding[]>(`/security/findings?limit=${limit}`);
 }
 
-// ---- FR-171 案件四栏详情 ----
+// ---- 安全治理 案件四栏详情 ----
 
 export interface SecurityCaseDetail {
   case: SecurityCase;

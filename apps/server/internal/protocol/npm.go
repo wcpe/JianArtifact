@@ -399,7 +399,7 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 		}
 		_ = h.assets.DiscardStagedAssets(planned)
 	}()
-	// 准入管线（FR-169）：tarball 附件是客户端字节，各自先私有接收→完整性裁定→
+	// 准入管线：tarball 附件是客户端字节，各自先私有接收→完整性裁定→
 	// 封存字节入暂存；packument 是服务端派生元数据，不隔离。
 	var candPrincipals []*auth.Principal
 	var candRows []repository.AdmissionCandidateRow

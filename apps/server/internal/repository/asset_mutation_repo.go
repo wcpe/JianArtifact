@@ -538,8 +538,7 @@ func (r *AssetMutationRepo) CountBlobReferences(hash string) (int, error) {
 	return count, err
 }
 
-// CountActiveHoldReferences 返回指向该摘要的活跃证据保全数（FR-168 删除预约：
-// 保全期间 blob-gc 不得回收对应字节）。
+// CountActiveHoldReferences 返回指向该摘要的活跃证据保全数。
 func (r *AssetMutationRepo) CountActiveHoldReferences(hash string) (int, error) {
 	var count int
 	err := r.db.Get(&count, `SELECT COUNT(*) FROM evidence_hold WHERE state='active' AND (digest=? OR digest=?)`, hash, "sha256:"+hash)

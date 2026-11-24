@@ -285,7 +285,7 @@ func (h *OCIHandler) putManifest(c *gin.Context, repo, image, reference string) 
 		return
 	}
 	defer func() { settle(false) }()
-	// FR-169：manifest 是客户端字节，私有接收→裁定→封存字节再入发布。
+	// 安全治理：manifest 是客户端字节，私有接收→裁定→封存字节再入发布。
 	body, candRow, candP, candErr := h.ociAdmissionIntake(c, repo, ociManifestPolicyPath(image, reference), defaultContentType(c.GetHeader("Content-Type")), bytes.NewReader(body), int64(len(body)))
 	if candErr != nil {
 		h.auditRejected(c, "oci.manifest.put", repo, ociManifestPolicyPath(image, reference), publishRejectionDetail(candErr))
@@ -369,7 +369,7 @@ func (h *OCIHandler) completeUpload(c *gin.Context, repo, image, id string) {
 		writeOCIError(c, http.StatusInternalServerError, "BLOB_UPLOAD_INVALID", "读取暂存失败")
 		return
 	}
-	// FR-169：组装好的 blob 字节经私有候选准入再发布。
+	// 安全治理：组装好的 blob 字节经私有候选准入再发布。
 	blobSrc, candRow, candP, candErr := h.ociAdmissionIntakeRC(c, repo, path, "application/octet-stream", file)
 	if candErr != nil {
 		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(candErr))
@@ -630,7 +630,7 @@ func maxInt64(value, fallback int64) int64 {
 	return value
 }
 
-// ── OCI 私有候选准入（FR-169）──────────────────────────────────────────────
+// ── OCI 私有候选准入──────────────────────────────────────────────
 
 // ociAdmissionIntake 接收客户端字节为私有候选并完成完整性裁定；返回封存字节内容。
 // 未装配准入或仓库未获准（非 hosted OCI）时原样返回输入。

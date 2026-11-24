@@ -38,6 +38,7 @@ type AuthOutcome struct {
 	ChallengeID    string
 	ChallengeToken string
 	ExpiresAt      time.Time
+	EnrollmentURI  string
 }
 
 // SetMfaService 注入强认证服务；nil 保持既有单因素行为（未装配环境兼容）。
@@ -305,6 +306,25 @@ func (s *AuthService) issueCredentialOutcome(ctx context.Context, account func(*
 				o.ChallengeID = ch.ChallengeID
 				o.ChallengeToken = challengeToken
 				o.ExpiresAt = time.Unix(ch.ExpiresAt, 0)
+				outcome = o
+				return nil
+			}
+			// 恢复码已消费、重绑未完成的账号：口令不足以直签完整会话；
+			// 重发 factor_recover 挑战与新待登记因子，完成确认后才能再登录。
+			pending, ferr := repository.HasPendingTotpFactorTx(ctx, tx, current.ID)
+			if ferr != nil {
+				return ferr
+			}
+			if pending {
+				en, cerr := s.mfa.issueFactorRecoverEnrollmentTx(ctx, tx, current, "login_recover", sessionBinding)
+				if cerr != nil {
+					return cerr
+				}
+				o.Next = AuthNextMfaRequired
+				o.ChallengeID = en.ChallengeID
+				o.ChallengeToken = en.ChallengeToken
+				o.ExpiresAt = en.ExpiresAt
+				o.EnrollmentURI = en.EnrollmentURI
 				outcome = o
 				return nil
 			}

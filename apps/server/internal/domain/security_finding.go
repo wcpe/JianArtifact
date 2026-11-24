@@ -16,11 +16,11 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-171 规则检测投影：security_event を sequence 順に消費し、版付き規則で命中を
-// 冪等登録 → 同主体の未決案件に集約、無ければ自動建案 + 站内/SMTP 通知。
-// 規則は検出と通知のみ（自動封禁・自動結案・弱线索による并案はしない）。
-// 命中 ID は規則・版・主体・窓の決定的ハッシュ：同じ再計算は同じ ID を出し、
-// INSERT OR IGNORE で二重登録・二重建案を防ぐ。
+// 安全治理规则检测投影：security_event 按 sequence 顺序消费，命中经带版本规则
+// 幂等登记 → 聚合到同主体未决案件，无则自动建案 + 站内/SMTP 通知。
+// 规则只做检测与通知（不自动封禁、不自动结案、不按弱线索并案）。
+// 命中 ID 是规则·版本·主体·窗口的确定性哈希：相同重算产出相同 ID，
+// 以 INSERT OR IGNORE 防止重复登记与重复建案。
 
 const (
 	findingBatchSize      = 100
@@ -31,12 +31,12 @@ const (
 	// denialBurstThreshold/Window：同主体 5 分 10 回拒否（規格 §3.2 初期規則）。
 	denialBurstThreshold = 10
 	denialBurstWindow    = 300
-	// deniedThenCommitWindow：拒否後 10 分以内に別来源で已提交（規格 §3.2）。
+	// deniedThenCommitWindow：拒绝后 10 分钟内另一来源已提交（规范 §3.2）。
 	deniedThenCommitWindow = 600
 )
 
-// SecurityFindingService は規則投影 worker（単一実行前提；二重起動でも
-// 水位・冪等 ID により行は増えないが処理は重複し得る→调度器は単一实例）。
+// SecurityFindingService 是规则投影 worker（单实例前提；即使重复启动，
+// 水位与幂等 ID 保证行不重复，但处理可能重复→调度器保持单实例）。
 type SecurityFindingService struct {
 	repo interface {
 		Write(ctx context.Context, fn func(*sqlx.Tx) error) error
@@ -52,7 +52,7 @@ func NewSecurityFindingService(repo interface {
 	return &SecurityFindingService{repo: repo, now: time.Now}
 }
 
-// findingSubject は評価対象の安定錨点（user → credential → client_ip の順で代表）。
+// findingSubject 是评估对象的稳定锚点（按 user → credential → client_ip 顺序取代表）。
 type findingSubject struct {
 	Kind, Key, Column string
 	Value             any
@@ -74,14 +74,14 @@ func findingSubjects(e repository.SecurityFindingEventRow) []findingSubject {
 	return out
 }
 
-// findingIDFor は決定的命中 ID（重複計算で再発しない冪等键）。
+// findingIDFor 生成确定性命中 ID（重复计算不再新发的幂等键）。
 func findingIDFor(ruleID string, version int, subjectKey string, bucket int64) string {
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%d", ruleID, version, subjectKey, bucket)))
 	return "fnd-" + hex.EncodeToString(h[:16])
 }
 
-// RunBatch は水位以降の最大 100 件を消費し、命中→案件集約/建案→水位前進までを
-// 単一写トランザクションで行う。命中件数を返す。
+// RunBatch 消费水位后至多 100 件事件，命中→案件聚合/建案→水位前进，
+// 全部在单一写事务内完成。返回命中件数。
 func (s *SecurityFindingService) RunBatch(ctx context.Context) (int, error) {
 	newFindings := 0
 	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
@@ -112,7 +112,7 @@ func (s *SecurityFindingService) RunBatch(ctx context.Context) (int, error) {
 	return newFindings, err
 }
 
-// evaluate は 1 イベントに全規則を適用する。
+// evaluate 对单个事件应用全部规则。
 func (s *SecurityFindingService) evaluate(ctx context.Context, tx *sqlx.Tx, ev repository.SecurityFindingEventRow, now time.Time) (int, error) {
 	subjects := findingSubjects(ev)
 	if len(subjects) == 0 {
@@ -132,16 +132,16 @@ func (s *SecurityFindingService) evaluate(ctx context.Context, tx *sqlx.Tx, ev r
 					RuleID:    ruleDenialBurstID, RuleVersion: findingRuleVersion,
 					Severity: "medium", Confidence: "high", SubjectKey: sub.Key,
 					WindowFrom: ev.OccurredAt - denialBurstWindow, WindowTo: ev.OccurredAt,
-					Summary: fmt.Sprintf("主体 %s が 5 分以内に %d 回拒否（阈值 %d）", sub.Key, n, denialBurstThreshold),
-				}, ev, "同主体の連続拒否", now)
+					Summary: fmt.Sprintf("主体 %s 在 5 分钟内被拒绝 %d 次（阈值 %d）", sub.Key, n, denialBurstThreshold),
+				}, ev, "同主体连续拒绝", now)
 				if err != nil {
 					return count, err
 				}
 				count += new
 			}
 		}
-		// 規則 denied_then_committed：拒否の後、別来源から已提交が成功。
-		// ip: 主体は来源そのものなので「新来源」は成立せず評価しない。
+		// 规则 denied_then_committed：拒绝之后，另一来源已提交成功。
+		// ip 主体即来源本身，「新来源」不成立故不评估。
 		if ev.EventType == "asset.change_committed" && ev.Committed == "committed" && sub.Kind != "ip" {
 			n, err := repository.DeniedFromOtherIPTx(ctx, tx, sub.Column, sub.Value,
 				ev.OccurredAt-deniedThenCommitWindow, ev.OccurredAt, ev.ClientIPFamily, ev.ClientIP)
@@ -154,15 +154,15 @@ func (s *SecurityFindingService) evaluate(ctx context.Context, tx *sqlx.Tx, ev r
 					RuleID:    ruleDeniedThenCommit, RuleVersion: findingRuleVersion,
 					Severity: "high", Confidence: "medium", SubjectKey: sub.Key,
 					WindowFrom: ev.OccurredAt - deniedThenCommitWindow, WindowTo: ev.OccurredAt,
-					Summary: fmt.Sprintf("主体 %s が拒否後 10 分以内に新しい来源から已提交を成功（拒否 %d 件）", sub.Key, n),
-				}, ev, "拒否後の新来源での成功", now)
+					Summary: fmt.Sprintf("主体 %s 在拒绝后 10 分钟内从新来源成功已提交（拒绝 %d 件）", sub.Key, n),
+				}, ev, "拒绝后新来源成功", now)
 				if err != nil {
 					return count, err
 				}
 				count += new
 			}
 		}
-		// 規則 sensitive_change_new_source：新来源での機微操作（権限/凭据変更）。
+		// 规则 sensitive_change_new_source：新来源的敏感操作（权限/凭据变更）。
 		if ev.EventType == "auth.account_access_changed" && len(ev.ClientIP) > 0 {
 			n, err := repository.SubjectSeenFromIPTx(ctx, tx, sub.Column, sub.Value,
 				ev.OccurredAt, ev.ClientIPFamily, ev.ClientIP)
@@ -175,8 +175,8 @@ func (s *SecurityFindingService) evaluate(ctx context.Context, tx *sqlx.Tx, ev r
 					RuleID:    ruleSensitiveNewSrcID, RuleVersion: findingRuleVersion,
 					Severity: "high", Confidence: "medium", SubjectKey: sub.Key,
 					WindowFrom: ev.OccurredAt, WindowTo: ev.OccurredAt,
-					Summary: fmt.Sprintf("主体 %s が初めて観測する来源から権限/凭据変更（event %s）", sub.Key, ev.EventID),
-				}, ev, "新来源からの機微操作", now)
+					Summary: fmt.Sprintf("主体 %s 首次观测的来源执行权限/凭据变更（event %s）", sub.Key, ev.EventID),
+				}, ev, "新来源的敏感操作", now)
 				if err != nil {
 					return count, err
 				}
@@ -187,8 +187,8 @@ func (s *SecurityFindingService) evaluate(ctx context.Context, tx *sqlx.Tx, ev r
 	return count, nil
 }
 
-// record は命中を冪等登録し、新規なら未決案件集約または自動建案 + 通知を行う。
-// 戻り値は新規登録した命中数（0/1）。
+// record 幂等登记命中；新命中则聚合到未决案件或自动建案 + 通知。
+// 返回新登记命中数（0/1）。
 func (s *SecurityFindingService) record(ctx context.Context, tx *sqlx.Tx, f repository.SecurityFindingRow,
 	ev repository.SecurityFindingEventRow, caseTitle string, now time.Time) (int, error) {
 	f.CaseID = ""
@@ -198,12 +198,12 @@ func (s *SecurityFindingService) record(ctx context.Context, tx *sqlx.Tx, f repo
 		return 0, err
 	}
 	if !inserted {
-		return 0, nil // 既出命中：再計算・旧イベント重放は無視（建案も読取もしない）
+		return 0, nil // 已登记命中：重算与旧事件重放一律忽略（不建案也不读）
 	}
 	if err := repository.LinkFindingEventTx(ctx, tx, f.FindingID, ev.Sequence); err != nil {
 		return 0, err
 	}
-	// 同主体の未決案件に集約；無ければ自動建案（opened_by=rule-engine）。
+	// 聚合到同主体未决案件；无则自动建案（opened_by=rule-engine）。
 	caseID, err := repository.OpenCaseForSubjectTx(ctx, tx, f.SubjectKey)
 	if err == sql.ErrNoRows {
 		caseID = ""
@@ -228,7 +228,7 @@ func (s *SecurityFindingService) record(ctx context.Context, tx *sqlx.Tx, f repo
 	if err := repository.AttachFindingCaseTx(ctx, tx, f.FindingID, caseID); err != nil {
 		return 0, err
 	}
-	// 命中の証拠イベントを案件に fact 関連付け。
+	// 命中的证据事件以 fact 关联到案件。
 	if err := repository.LinkSecurityCaseEventTx(ctx, tx, repository.SecurityCaseLinkRow{
 		CaseID: caseID, EventID: ev.EventID, LinkKind: "fact", LinkedBy: "rule-engine", LinkedUnix: now.Unix(),
 	}); err != nil {
@@ -237,7 +237,7 @@ func (s *SecurityFindingService) record(ctx context.Context, tx *sqlx.Tx, f repo
 	return 1, nil
 }
 
-// ListFindings は命中を新しい順で返す（管理員限定は呼び出し側で裁决済み）。
+// ListFindings 按新到旧返回命中（管理员限定由调用侧裁决）。
 func (s *SecurityFindingService) ListFindings(ctx context.Context, p *auth.Principal, limit int) ([]repository.SecurityFindingRow, error) {
 	if p == nil || p.UserID <= 0 || p.Role != "admin" {
 		return nil, ErrAdmissionForbidden

@@ -179,7 +179,7 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	// 准入管线（FR-169）：表单主文件是客户端字节，先私有接收→完整性裁定→
+	// 准入管线：表单主文件是客户端字节，先私有接收→完整性裁定→
 	// 封存字节进入暂存；服务端派生的 pom/metadata/校验和不需隔离。
 	var candidateRow repository.AdmissionCandidateRow
 	var candidatePrincipal *auth.Principal

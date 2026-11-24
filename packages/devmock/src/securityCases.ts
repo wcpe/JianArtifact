@@ -1,4 +1,4 @@
-// FR-171/172 devmock：案件列表/详情/四栏/转移/既読 + 规则命中种子数据。
+// 安全治理 devmock：案件列表/详情/四栏/转移/既読 + 规则命中种子数据。
 import { http, HttpResponse } from "msw";
 import { MOCK_TOKEN, MOCK_SECOND_ADMIN_TOKEN } from "./store";
 

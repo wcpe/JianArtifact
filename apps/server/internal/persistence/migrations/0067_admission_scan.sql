@@ -1,4 +1,4 @@
--- FR-170 隔离静态检测：候选扫描任务的持久租约与有界结构化事实。
+-- 安全治理 隔离静态检测：候选扫描任务的持久租约与有界结构化事实。
 CREATE TABLE admission_scan_job (
     job_id TEXT PRIMARY KEY,
     operation_id TEXT NOT NULL REFERENCES private_admission_candidate(operation_id),

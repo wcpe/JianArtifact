@@ -30,12 +30,12 @@ const (
 	admissionMaxBytes        int64 = 64 << 20
 	admissionLifetime              = 7 * 24 * time.Hour
 	admissionIntegrityFailed       = "admission_integrity_failed"
-	// FR-169 私有暂存容量上限（拟议预算）：超上限返回 admission_limit。
+	// 安全治理 私有暂存容量上限（拟议预算）：超上限返回 admission_limit。
 	admissionMaxRepoPendingBytes  int64 = 4 << 30
 	admissionMaxTotalPendingBytes int64 = 32 << 30
 	admissionMaxRepoPendingCount  int64 = 256
 	admissionMaxTotalPendingCount int64 = 4096
-	// FR-170 扫描任务：内置完整性检测版本号与租约。
+	// 安全治理 扫描任务：内置完整性检测版本号与租约。
 	admissionScanEngine        = "builtin-integrity"
 	admissionScanEngineVersion = "1"
 	admissionScanRulesVersion  = "1"
@@ -49,7 +49,7 @@ var (
 	ErrAdmissionUnavailable     = errors.New("候选状态暂不可确认")
 	// ErrAdmissionLimit 私有暂存超出容量或条数上限；映射 413 admission_limit。
 	ErrAdmissionLimit = errors.New("私有暂存容量已满")
-	// ErrConfirmationStale 确认令牌伪造、过期、重放或绑定漂移（FR-170）。
+	// ErrConfirmationStale 确认令牌伪造、过期、重放或绑定漂移。
 	ErrConfirmationStale = errors.New("确认令牌无效或已失效")
 )
 
@@ -68,7 +68,7 @@ type AdmissionStatus struct {
 
 // admissionStatus 只投影白名单字段。
 
-// AdmissionService 登记和追踪私有候选；批准后把字节提升为公开资产（FR-169）。
+// AdmissionService 登记和追踪私有候选；批准后把字节提升为公开资产。
 type AdmissionService struct {
 	rows         *repository.AdmissionCandidateRepo
 	jobs         *repository.AdmissionScanJobRepo
@@ -254,7 +254,7 @@ func (s *AdmissionService) Status(ctx context.Context, principal *auth.Principal
 			row.ManifestDigest == nil || *row.ManifestDigest != admissionManifestDigest(row, repo.Format, *row.BlobHash, *row.SizeBytes) {
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
-		// FR-170：检测经持久 scan_job 认领；租约带递增代次与墙钟。
+		// 安全治理：检测经持久 scan_job 认领；租约带递增代次与墙钟。
 		workerID := "main-" + s.bootID
 		var job repository.AdmissionScanJobRow
 		var claimed bool
@@ -294,7 +294,7 @@ func (s *AdmissionService) Status(ctx context.Context, principal *auth.Principal
 		}
 		verifyErr := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes)
 		<-s.verification
-		// 完成事务：租约代次栅栏 + 事实追加 + 候选转态（FR-170 §3.2）。
+		// 完成事务：租约代次栅栏 + 事实追加 + 候选转态。
 		verdict, integrity, errCode := "approved", "passed", ""
 		switch {
 		case errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity):
@@ -481,7 +481,7 @@ func (s *AdmissionService) transitionStatus(ctx context.Context, p *auth.Princip
 	return admissionStatus(row), nil
 }
 
-// transitionStatusTx 在既有写事务内复核归属/版本/当前态后转态（FR-170 扫描完成同事务）。
+// transitionStatusTx 在既有写事务内复核归属/版本/当前态后转态。
 func (s *AdmissionService) transitionStatusTx(ctx context.Context, tx *sqlx.Tx, p *auth.Principal, row repository.AdmissionCandidateRow, state, code string) (AdmissionStatus, error) {
 	current, err := s.authorizedRowTx(ctx, tx, p, row.OperationID)
 	if err != nil {
@@ -582,6 +582,9 @@ func checkAdmissionPrincipal(p *auth.Principal) error {
 	case p.Kind == auth.KindInternal:
 		// 内部批写入口（迁移导入）：身份绑定任务发起人，
 		// 每次接收仍按当前 ACL 复核发布权。
+	case p.Kind == "" && p.AuthSource == auth.AuthSourceBasic:
+		// 协议 Basic 口令主体：口令在锁外核验，凭据位由账号代次承载，
+		// 与 token 主体同等地按 ACL 复核发布权。
 	default:
 		return ErrAdmissionForbidden
 	}
@@ -615,7 +618,7 @@ func admissionManifestDigest(r repository.AdmissionCandidateRow, format, hash st
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
 
-// ── FR-169 最小准入流水线：检测结论 + 管理员审批 + 提升发布 ─────────────────
+// ── 安全治理 最小准入流水线：检测结论 + 管理员审批 + 提升发布 ─────────────────
 
 var ErrAdmissionDecisionRejected = errors.New("准入裁决被拒")
 
@@ -731,7 +734,7 @@ func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operat
 	if row.BlobHash == nil || row.SizeBytes == nil {
 		return AdmissionStatus{}, ErrAdmissionUnavailable
 	}
-	// FR-170：确认令牌绑定主体/动作/版本/摘要/规则/有效期，登记单次消费后才允许推进。
+	// 安全治理：确认令牌绑定主体/动作/版本/摘要/规则/有效期，登记单次消费后才允许推进。
 	tokenID, err := s.verifyConfirmToken(p, operationID, action, row, confirmToken)
 	if err != nil {
 		return AdmissionStatus{}, err
@@ -753,6 +756,14 @@ func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operat
 	}
 	if action == "reject" {
 		return s.transitionStatusAdmin(ctx, row, "rejected", "manual_reject")
+	}
+	// 提升前业务复核：候选必须仍处送审态且未过期，原发起人须仍持目标仓发布权——
+	// 确认令牌只复核令牌要素，不替代提升点的授权与时效裁决。
+	if row.State != "awaiting_review" || (row.ExpiresUnix > 0 && row.ExpiresUnix <= time.Now().Unix()) {
+		return AdmissionStatus{}, ErrConfirmationStale
+	}
+	if err := s.recheckInitiatorPublish(ctx, row); err != nil {
+		return AdmissionStatus{}, err
 	}
 	// approve：隔离区外先做字节搬运（私有→内容寻址活动存储），再同事务标 published。
 	if s.assets == nil {
@@ -776,6 +787,31 @@ func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operat
 	}
 	row.PublishedAssetID = &asset.ID
 	return s.transitionStatusAdmin(ctx, row, "published", "")
+}
+
+// recheckInitiatorPublish 提升点复核：原发起人当前必须仍是活动账号且持目标仓
+// 发布授权（管理员直接通过，其余按 admission_publish_grant 实时裁决）。
+func (s *AdmissionService) recheckInitiatorPublish(ctx context.Context, row repository.AdmissionCandidateRow) error {
+	return s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+		var u repository.User
+		if err := tx.GetContext(ctx, &u, `SELECT id, username, role, status FROM user WHERE id=?`, row.ActorUserID); err != nil {
+			return admissionServiceError(err)
+		}
+		if u.Status != "active" {
+			return ErrAdmissionForbidden
+		}
+		if u.Role == "admin" {
+			return nil
+		}
+		allowed, err := repository.AdmissionPublishGrantTx(ctx, tx, row.RepositoryID, u.ID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrAdmissionForbidden
+		}
+		return nil
+	})
 }
 
 func (s *AdmissionService) repoByID(ctx context.Context, id int64) (*repository.Repository, error) {
@@ -811,7 +847,7 @@ func (s *AdmissionService) IntakeCandidate(ctx context.Context, principal *auth.
 }
 
 // IntakeInternalCandidate 是内部批写入口的接收变体：HTTP 上下文没有来源快照时，
-// 由调用方以任务记录的发起快照显式注入（迁移导入等后台写入口，FR-169 §3.6）。
+// 由调用方以任务记录的发起快照显式注入（迁移导入等后台写入口，安全治理 §3.6）。
 func (s *AdmissionService) IntakeInternalCandidate(ctx context.Context, principal *auth.Principal, source auditctx.Source, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error) {
 	return s.IntakeCandidate(auditctx.WithSource(ctx, source), principal, repositoryID, canonicalPath, contentType, body)
 }
@@ -837,10 +873,10 @@ func (s *AdmissionService) MarkPublished(ctx context.Context, principal *auth.Pr
 	return s.transitionStatus(ctx, principal, row, "published", "")
 }
 
-// admissionFormatAllowed 是获准走私有候选准入的协议格式集合（FR-169 已接入口径）。
+// admissionFormatAllowed 是获准走私有候选准入的协议格式集合。
 func admissionFormatAllowed(format string) bool { return AdmissionFormatAllowed(format) }
 
-// AdmissionFormatAllowed 是获准走私有候选准入的协议格式集合（FR-169 已接入口径）。
+// AdmissionFormatAllowed 是获准走私有候选准入的协议格式集合。
 func AdmissionFormatAllowed(format string) bool {
 	switch format {
 	case "raw", "maven", "cargo", "npm", "docker", "nuget", "pypi":

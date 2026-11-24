@@ -110,7 +110,7 @@ func (h *Handlers) DecidePrivateAdmissionCandidate(c *gin.Context, operationID P
 	c.JSON(http.StatusOK, out)
 }
 
-// PreviewPrivateAdmissionDecision 预览裁决可行性并签发短效单次确认令牌（FR-170）；预览不改候选。
+// PreviewPrivateAdmissionDecision 预览裁决可行性并签发短效单次确认令牌；预览不改候选。
 func (h *Handlers) PreviewPrivateAdmissionDecision(c *gin.Context, operationID PrivateAdmissionOperationIdParam) {
 	c.Header("Cache-Control", "private, no-store")
 	p, ok := requireAdmin(c)

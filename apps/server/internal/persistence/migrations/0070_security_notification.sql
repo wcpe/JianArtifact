@@ -1,4 +1,4 @@
--- FR-172 安全通知：站内持久递增序列（7 天可重放）+ 站外投递登记。
+-- 安全治理 安全通知：站内持久递增序列（7 天可重放）+ 站外投递登记。
 -- 游标=递增 seq，绑定序列域即可分页回放；不依赖进程内广播。
 CREATE TABLE security_notification (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -9,7 +9,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// AdmissionScanJobRow 是 admission_scan_job 的持久投影（FR-170）。
+// AdmissionScanJobRow 是 admission_scan_job 的持久投影。
 type AdmissionScanJobRow struct {
 	JobID                string `db:"job_id"`
 	OperationID          string `db:"operation_id"`

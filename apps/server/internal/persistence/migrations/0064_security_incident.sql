@@ -1,4 +1,4 @@
--- FR-168：持久事故处置动作、事故限制与证据保全。
+-- 安全治理：持久事故处置动作、事故限制与证据保全。
 CREATE TABLE IF NOT EXISTS security_action (
     action_id        TEXT PRIMARY KEY,
     action_type      TEXT NOT NULL CHECK (action_type IN

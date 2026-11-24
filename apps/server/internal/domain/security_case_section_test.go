@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-171：案件四栏详情——timeline/uploads/identity/actions-evidence。
+// 安全治理：案件四栏详情——timeline/uploads/identity/actions-evidence。
 func TestSecurityCaseSections(t *testing.T) {
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
@@ -38,7 +38,7 @@ func TestSecurityCaseSections(t *testing.T) {
 
 	svc := NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), repository.NewUserRepo(db))
 	p := &auth.Principal{UserID: 1, Role: "admin"}
-	c, err := svc.OpenSecurityCase(ctx, p, "四栏テスト", "high", "テスト",
+	c, err := svc.OpenSecurityCase(ctx, p, "四栏测试", "high", "测试",
 		[]repository.SecurityCaseLinkRow{{EventID: eventID, LinkKind: "fact"}})
 	if err != nil {
 		t.Fatalf("建案：%v", err)

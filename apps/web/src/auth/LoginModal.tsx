@@ -1,6 +1,6 @@
 //  登录模态框：取代整页 /login。任意位置经 useLoginModal.openLogin 弹出，
 // 登录成功后关闭并停留当前页；取消时执行调用方传入的 onCancel（如受保护页回落仓库列表）。
-import { Alert, Button, Group, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
+import { Alert, Anchor, Button, Code, Group, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { IconAlertCircle, IconKey, IconLogin } from "@tabler/icons-react";
 import {
@@ -32,13 +32,21 @@ const LoginModalContext = createContext<LoginModalContextValue | null>(null);
 
 export function LoginModalProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  const { login, oidcError, clearOidcError } = useAuth();
+  const { login, persistSession, oidcError, clearOidcError } = useAuth();
   const [opened, setOpened] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [oidcEnabled, setOidcEnabled] = useState(false);
   // onCancel 用函数状态持有（setState 传入函数会被当 updater，需再包一层）。
   const [onCancel, setOnCancel] = useState<(() => void) | null>(null);
+  // 挑战流步骤：口令 →（按需）OTP / 恢复码 / 认领票 → 因子登记 → 恢复码展示。
+  const [step, setStep] = useState<"credentials" | "mfa" | "recovery" | "claim" | "enroll" | "codes">("credentials");
+  const [challengeToken, setChallengeToken] = useState("");
+  const [enrollUri, setEnrollUri] = useState("");
+  const [otp, setOtp] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [claimTicket, setClaimTicket] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
 
   // 仅在打开登录框时查询一次 OIDC 是否启用（未配置时后端端点为 404）；
   // 用 ref 做一次性守卫——若用 state 标记，effect 会因依赖变化重跑并把在途结果丢弃。
@@ -75,6 +83,13 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
     (opts?: OpenLoginOptions) => {
       setOnCancel(() => opts?.onCancel ?? null);
       setError(null);
+      setStep("credentials");
+      setChallengeToken("");
+      setEnrollUri("");
+      setOtp("");
+      setRecoveryCode("");
+      setClaimTicket("");
+      setRecoveryCodes([]);
       form.reset();
       setOpened(true);
     },
@@ -88,21 +103,87 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
     onCancel?.();
   };
 
-  const handleSubmit = form.onSubmit((values) => {
+  const run = (work: () => Promise<void>) => {
     setSubmitting(true);
     setError(null);
-    login(values.username, values.password)
-      .then(() => {
-        // 登录成功：仅关闭，停留当前页（取消强制跳转）。
-        setOpened(false);
-      })
+    work()
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : String(err));
       })
-      .finally(() => {
-        setSubmitting(false);
-      });
+      .finally(() => setSubmitting(false));
+  };
+
+  const handleSubmit = form.onSubmit((values) => {
+    run(async () => {
+      const res = await login(values.username, values.password);
+      if (res.next === "authenticated") {
+        // 登录成功：仅关闭，停留当前页（取消强制跳转）。
+        setOpened(false);
+        return;
+      }
+      if (res.next === "mfa_required") {
+        setChallengeToken(res.challengeToken ?? "");
+        if (res.enrollmentUri) {
+          // 恢复重绑挑战：直接展示新登记 URI 走确认。
+          setEnrollUri(res.enrollmentUri);
+          setStep("enroll");
+        } else {
+          setStep("mfa");
+        }
+        return;
+      }
+      if (res.next === "claim_required") {
+        // 账号须持认领票进入因子登记引导。
+        setStep("claim");
+      }
+    });
   });
+
+  const handleVerifyMfa = () => {
+    run(async () => {
+      const res = await api.verifyLoginMfa(challengeToken, otp.trim());
+      if (res.token) {
+        persistSession(res.token, res.user);
+        setOpened(false);
+      }
+    });
+  };
+
+  const handleRecover = () => {
+    run(async () => {
+      const en = await api.recoverLoginMfa(challengeToken, recoveryCode.trim());
+      setChallengeToken(en.challengeToken);
+      setEnrollUri(en.enrollmentUri);
+      setStep("enroll");
+    });
+  };
+
+  const handleClaim = () => {
+    run(async () => {
+      const en = await api.claimMfaEnroll(form.values.username, form.values.password, claimTicket.trim());
+      setChallengeToken(en.challengeToken);
+      setEnrollUri(en.enrollmentUri);
+      setStep("enroll");
+    });
+  };
+
+  const handleConfirmEnroll = () => {
+    run(async () => {
+      const codes = await api.confirmMfaEnroll(challengeToken, otp.trim(), claimTicket || undefined);
+      setRecoveryCodes(codes.recoveryCodes);
+      setStep("codes");
+    });
+  };
+
+  const handleCodesDone = () => {
+    // 因子已激活：回到口令步重新登录（新会话会走 mfa_required）。
+    setStep("credentials");
+    setOtp("");
+    setChallengeToken("");
+    setEnrollUri("");
+    setRecoveryCodes([]);
+    setError(null);
+  };
 
   const value = useMemo<LoginModalContextValue>(() => ({ openLogin }), [openLogin]);
 
@@ -119,29 +200,124 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
               {error}
             </Alert>
           ) : null}
-          <form onSubmit={handleSubmit}>
+          {step === "credentials" ? (
+            <form onSubmit={handleSubmit}>
+              <Stack>
+                <TextInput
+                  label={t("auth.username")}
+                  withAsterisk
+                  data-autofocus
+                  {...form.getInputProps("username")}
+                />
+                <PasswordInput
+                  label={t("auth.password")}
+                  withAsterisk
+                  {...form.getInputProps("password")}
+                />
+                <Group justify="flex-end">
+                  <Button variant="default" onClick={handleCancel}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button type="submit" loading={submitting} leftSection={<IconLogin size={16} />}>
+                    {t("auth.login")}
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
+          ) : null}
+          {step === "mfa" ? (
             <Stack>
+              <Text size="sm">{t("auth.mfaCodeHint")}</Text>
               <TextInput
-                label={t("auth.username")}
+                label={t("auth.mfaCode")}
                 withAsterisk
                 data-autofocus
-                {...form.getInputProps("username")}
+                value={otp}
+                onChange={(e) => setOtp(e.currentTarget.value)}
               />
-              <PasswordInput
-                label={t("auth.password")}
+              <Anchor component="button" type="button" size="sm" onClick={() => setStep("recovery")}>
+                {t("auth.useRecoveryCode")}
+              </Anchor>
+              <Group justify="flex-end">
+                <Button variant="default" onClick={handleCancel}>
+                  {t("common.cancel")}
+                </Button>
+                <Button onClick={handleVerifyMfa} loading={submitting} disabled={!otp.trim()}>
+                  {t("auth.mfaVerify")}
+                </Button>
+              </Group>
+            </Stack>
+          ) : null}
+          {step === "recovery" ? (
+            <Stack>
+              <Text size="sm">{t("auth.recoveryCodeHint")}</Text>
+              <TextInput
+                label={t("auth.recoveryCode")}
                 withAsterisk
-                {...form.getInputProps("password")}
+                data-autofocus
+                value={recoveryCode}
+                onChange={(e) => setRecoveryCode(e.currentTarget.value)}
+              />
+              <Group justify="flex-end">
+                <Button variant="default" onClick={() => setStep("mfa")}>
+                  {t("common.back")}
+                </Button>
+                <Button onClick={handleRecover} loading={submitting} disabled={!recoveryCode.trim()}>
+                  {t("auth.recoverFactor")}
+                </Button>
+              </Group>
+            </Stack>
+          ) : null}
+          {step === "claim" ? (
+            <Stack>
+              <Text size="sm">{t("auth.claimTicketHint")}</Text>
+              <TextInput
+                label={t("auth.claimTicket")}
+                withAsterisk
+                data-autofocus
+                value={claimTicket}
+                onChange={(e) => setClaimTicket(e.currentTarget.value)}
               />
               <Group justify="flex-end">
                 <Button variant="default" onClick={handleCancel}>
                   {t("common.cancel")}
                 </Button>
-                <Button type="submit" loading={submitting} leftSection={<IconLogin size={16} />}>
-                  {t("auth.login")}
+                <Button onClick={handleClaim} loading={submitting} disabled={!claimTicket.trim()}>
+                  {t("auth.claimEnroll")}
                 </Button>
               </Group>
             </Stack>
-          </form>
+          ) : null}
+          {step === "enroll" ? (
+            <Stack>
+              <Text size="sm">{t("auth.enrollUriHint")}</Text>
+              <Code block>{enrollUri}</Code>
+              <TextInput
+                label={t("auth.mfaCode")}
+                withAsterisk
+                data-autofocus
+                value={otp}
+                onChange={(e) => setOtp(e.currentTarget.value)}
+              />
+              <Group justify="flex-end">
+                <Button variant="default" onClick={handleCancel}>
+                  {t("common.cancel")}
+                </Button>
+                <Button onClick={handleConfirmEnroll} loading={submitting} disabled={!otp.trim()}>
+                  {t("auth.confirmEnroll")}
+                </Button>
+              </Group>
+            </Stack>
+          ) : null}
+          {step === "codes" ? (
+            <Stack>
+              <Text size="sm">{t("auth.recoveryCodesHint")}</Text>
+              <Code block>{recoveryCodes.join("\n")}</Code>
+              <Group justify="flex-end">
+                <Button onClick={handleCodesDone}>{t("auth.codesSaved")}</Button>
+              </Group>
+            </Stack>
+          ) : null}
           {oidcEnabled ? (
             // 该入口是顶层跳转（浏览器离开本页），不能用 fetch，故用链接按钮。
             <Button

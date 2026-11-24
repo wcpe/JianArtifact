@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 强认证（FR-167）首增量：挑战状态机 + TOTP 因子 + 恢复码。
+// 强认证首增量：挑战状态机 + TOTP 因子 + 恢复码。
 // 本服务只裁决因子与挑战生命周期，不签发会话；登录门与敏感操作确认在后续增量接入。
 const (
 	securityChallengeTTL      = 5 * time.Minute
@@ -469,6 +469,54 @@ func (s *SecurityMfaService) RecoverFactor(ctx context.Context, account reposito
 		return nil, err
 	}
 	return out, nil
+}
+
+// issueFactorRecoverEnrollmentTx 在调用方同一事务内重发 factor_recover 重绑：
+// 退役现存待登记因子、签发新挑战、种新待登记因子。供登录门在
+// 「恢复码已消费、重绑未完成」状态下拦截口令直签完整会话。
+func (s *SecurityMfaService) issueFactorRecoverEnrollmentTx(ctx context.Context, tx *sqlx.Tx, account repository.CredentialAccount, authSource, sessionBinding string) (*MfaEnrollment, error) {
+	if s.cipher == nil {
+		return nil, ErrMfaFactorUnavailable
+	}
+	now := s.now().Unix()
+	secret, secretB32, err := newTotpSecret()
+	if err != nil {
+		return nil, err
+	}
+	factorID := "tf-" + uuid.NewString()
+	ciphertext, err := s.cipher.seal(factorID, secret)
+	if err != nil {
+		return nil, ErrMfaFactorUnavailable
+	}
+	if err := repository.RetireTotpFactorsTx(ctx, tx, account.ID, now, repository.TotpFactorStatePending); err != nil {
+		return nil, err
+	}
+	challenge, token, err := s.issueChallenge(ctx, tx, account.ID, account.Epoch, repository.ChallengePurposeFactorRecover, authSource, sessionBinding)
+	if err != nil {
+		return nil, err
+	}
+	factor := repository.SecurityTotpFactor{
+		FactorID:         factorID,
+		UserID:           account.ID,
+		AccountEpoch:     account.Epoch,
+		State:            repository.TotpFactorStatePending,
+		SecretCiphertext: ciphertext,
+		KeyVersion:       s.cipher.keyVer,
+		LastAcceptedStep: -1,
+		CreatedAt:        now,
+		ChallengeID:      challenge.ChallengeID,
+	}
+	exp := challenge.ExpiresAt
+	factor.ExpiresAt = &exp
+	if err := repository.InsertTotpFactorTx(ctx, tx, factor); err != nil {
+		return nil, err
+	}
+	return &MfaEnrollment{
+		ChallengeID:    challenge.ChallengeID,
+		ChallengeToken: token,
+		ExpiresAt:      time.Unix(challenge.ExpiresAt, 0).UTC(),
+		EnrollmentURI:  totpEnrollmentURI(s.issuer, account.Username, secretB32),
+	}, nil
 }
 
 // TouchLoginChallenge 复核 login_mfa 挑战并返回其绑定信息（恢复路径的第一因素凭据）。

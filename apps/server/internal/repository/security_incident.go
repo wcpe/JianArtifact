@@ -8,7 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// FR-168 持久事故处置：动作生命周期（预览→确认→执行）、事故限制、证据保全。
+// 安全治理 持久事故处置：动作生命周期（预览→确认→执行）、事故限制、证据保全。
 
 const (
 	SecurityActionStatePreviewed = "previewed"
@@ -226,7 +226,7 @@ func ReleaseEvidenceHoldTx(ctx context.Context, tx *sqlx.Tx, holdID, actionID st
 	return nil
 }
 
-// ── 恢复隔离闸与安全状态水位（FR-168 §3.4 最小切片）─────────────────────────
+// ── 恢复隔离闸与安全状态水位─────────────────────────
 
 type RecoveryGate struct {
 	State             string  `db:"state"`

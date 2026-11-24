@@ -50,7 +50,7 @@ func NewOCIService(assets *AssetService, repos *RepositoryService) *OCIService {
 type OCIPublishResult struct {
 	Digest  string
 	Size    int64
-	AssetID int64 // manifest 资产号（FR-169 准入提升回执）
+	AssetID int64 // manifest 资产号
 }
 
 // PutBlob 校验 sha256 后写入 hosted OCI blob。digest 只接受 sha256。

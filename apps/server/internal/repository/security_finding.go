@@ -6,7 +6,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// SecurityFindingRow は規則命中の永続行。
+// SecurityFindingRow 是规则命中的持久行。
 type SecurityFindingRow struct {
 	FindingID   string `db:"finding_id"`
 	RuleID      string `db:"rule_id"`
@@ -21,7 +21,7 @@ type SecurityFindingRow struct {
 	CreatedUnix int64  `db:"created_unix"`
 }
 
-// SecurityFindingEventRow は投影が読む最小イベント行。
+// SecurityFindingEventRow 是投影读取的最小事件行。
 type SecurityFindingEventRow struct {
 	Sequence       int64  `db:"sequence"`
 	EventID        string `db:"event_id"`
@@ -38,7 +38,7 @@ type SecurityFindingEventRow struct {
 	OperationID    string `db:"operation_id"`
 }
 
-// FindingWatermarkTx は投影消費水位（無ければ 0）。
+// FindingWatermarkTx 返回投影消费水位（无则 0）。
 func FindingWatermarkTx(ctx context.Context, tx *sqlx.Tx) (int64, error) {
 	var seq int64
 	err := tx.GetContext(ctx, &seq,
@@ -49,21 +49,21 @@ func FindingWatermarkTx(ctx context.Context, tx *sqlx.Tx) (int64, error) {
 	return seq, nil
 }
 
-// InitFindingWatermarkTx は未初期化時に水位行を作る。
+// InitFindingWatermarkTx 未初始化时创建水位行。
 func InitFindingWatermarkTx(ctx context.Context, tx *sqlx.Tx) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO security_finding_watermark (id,last_sequence,updated_unix) VALUES (1,0,0)`)
 	return err
 }
 
-// SetFindingWatermarkTx はバッチ確定後に水位を前進させる。
+// SetFindingWatermarkTx 在批次结算后推进水位。
 func SetFindingWatermarkTx(ctx context.Context, tx *sqlx.Tx, lastSeq, now int64) error {
 	_, err := tx.ExecContext(ctx,
 		`UPDATE security_finding_watermark SET last_sequence=?, updated_unix=? WHERE id=1`, lastSeq, now)
 	return err
 }
 
-// EventsAfterSeqTx は水位以降の最小イベントを sequence 順で返す。
+// EventsAfterSeqTx 按 sequence 顺序返回水位之后的最小事件。
 func EventsAfterSeqTx(ctx context.Context, tx *sqlx.Tx, after int64, limit int) ([]SecurityFindingEventRow, error) {
 	var out []SecurityFindingEventRow
 	return out, tx.SelectContext(ctx, &out,
@@ -72,14 +72,14 @@ func EventsAfterSeqTx(ctx context.Context, tx *sqlx.Tx, after int64, limit int) 
 		   FROM security_event WHERE sequence>? ORDER BY sequence LIMIT ?`, after, limit)
 }
 
-// CountDeniedByActorTx は主体×窓の拒否件数（規則 subject_denial_burst）。
+// CountDeniedByActorTx 统计 主体×窗口 的拒绝件数（规则 subject_denial_burst）。
 func CountDeniedByActorTx(ctx context.Context, tx *sqlx.Tx, col string, val any, from, to int64) (int, error) {
 	var n int
 	q := `SELECT count(*) FROM security_event WHERE outcome='denied' AND occurred_at>=? AND occurred_at<=? AND ` + col + `=?`
 	return n, tx.GetContext(ctx, &n, q, from, to, val)
 }
 
-// DeniedFromOtherIPBeforeTx は同一主体が別 client_ip で拒否された直前イベント数（規則 denied_then_committed）。
+// DeniedFromOtherIPBeforeTx 统计同一主体在其他 client_ip 被拒的先前事件数（规则 denied_then_committed）。
 func DeniedFromOtherIPTx(ctx context.Context, tx *sqlx.Tx, col string, val any, from, to int64, ipFamily int, ip []byte) (int, error) {
 	var n int
 	q := `SELECT count(*) FROM security_event WHERE outcome='denied' AND occurred_at>=? AND occurred_at<=?
@@ -87,14 +87,14 @@ func DeniedFromOtherIPTx(ctx context.Context, tx *sqlx.Tx, col string, val any, 
 	return n, tx.GetContext(ctx, &n, q, from, to, val, ipFamily, ip)
 }
 
-// SubjectSeenFromIPTx は主体がこの client_ip を過去に使ったことがあるか（規則 sensitive_change_new_source）。
+// SubjectSeenFromIPTx 判断主体是否曾用此 client_ip（规则 sensitive_change_new_source）。
 func SubjectSeenFromIPTx(ctx context.Context, tx *sqlx.Tx, col string, val any, before int64, ipFamily int, ip []byte) (int, error) {
 	var n int
 	q := `SELECT count(*) FROM security_event WHERE occurred_at<? AND ` + col + `=? AND client_ip_family=? AND client_ip=?`
 	return n, tx.GetContext(ctx, &n, q, before, val, ipFamily, ip)
 }
 
-// InsertFindingTx は冪等 INSERT（再計算で重複しない）。新規なら true。
+// InsertFindingTx 幂等 INSERT（重算不重复）。新登记返回 true。
 func InsertFindingTx(ctx context.Context, tx *sqlx.Tx, r SecurityFindingRow) (bool, error) {
 	res, err := tx.NamedExecContext(ctx, `INSERT OR IGNORE INTO security_finding
  (finding_id,rule_id,rule_version,severity,confidence,subject_key,window_from,window_to,summary,case_id,created_unix)
@@ -106,20 +106,20 @@ func InsertFindingTx(ctx context.Context, tx *sqlx.Tx, r SecurityFindingRow) (bo
 	return n > 0, err
 }
 
-// LinkFindingEventTx は証証拠イベントを冪等登録。
+// LinkFindingEventTx 幂等登记证据事件。
 func LinkFindingEventTx(ctx context.Context, tx *sqlx.Tx, findingID string, eventSeq int64) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO security_finding_event (finding_id,event_sequence) VALUES (?,?)`, findingID, eventSeq)
 	return err
 }
 
-// AttachFindingCaseTx は命中を案件に紐付ける。
+// AttachFindingCaseTx 把命中关联到案件。
 func AttachFindingCaseTx(ctx context.Context, tx *sqlx.Tx, findingID, caseID string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE security_finding SET case_id=? WHERE finding_id=?`, caseID, findingID)
 	return err
 }
 
-// OpenCaseForSubjectTx は同主体の未決案件（同規則系の命中を持つもの優先でなく単純な open 案件）を返す。
+// OpenCaseForSubjectTx 返回同主体的未决案件（取含同系规则命中的优先，否则普通 open 案件）。
 func OpenCaseForSubjectTx(ctx context.Context, tx *sqlx.Tx, subjectKey string) (string, error) {
 	var id string
 	err := tx.GetContext(ctx, &id,
@@ -128,7 +128,7 @@ func OpenCaseForSubjectTx(ctx context.Context, tx *sqlx.Tx, subjectKey string) (
 	return id, err
 }
 
-// ListFindingsTx は命中一覧（新しい順）。
+// ListFindingsTx 命中列表（按新到旧）。
 func ListFindingsTx(ctx context.Context, tx *sqlx.Tx, limit int) ([]SecurityFindingRow, error) {
 	var out []SecurityFindingRow
 	return out, tx.SelectContext(ctx, &out,

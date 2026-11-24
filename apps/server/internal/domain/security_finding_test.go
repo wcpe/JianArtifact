@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-171：拒否バーストが規則命中→自動建案→通知まで通ること、再投影で増えないこと。
+// 安全治理：拒绝突发触发规则命中→自动建案→通知全链路，且重复投影不增行。
 func TestSecurityFindingBurstOpensCase(t *testing.T) {
 	db := mutationTestDB(t)
 	audit := NewSecurityAuditService(db)
@@ -29,7 +29,7 @@ func TestSecurityFindingBurstOpensCase(t *testing.T) {
 	var eventCount int
 	// 采集层对同源有限流抑制，可能少于 12；阈值 10 以上即可。
 	if err := db.Get(&eventCount, `SELECT count(*) FROM security_event WHERE outcome='denied'`); err != nil || eventCount < 10 {
-		t.Fatalf("前提イベント = %d err=%v，期望 >=10", eventCount, err)
+		t.Fatalf("前置事件 = %d err=%v，期望 >=10", eventCount, err)
 	}
 
 	fs := NewSecurityFindingService(repository.NewSecurityAuthFactorRepo(db))
@@ -37,7 +37,7 @@ func TestSecurityFindingBurstOpensCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("投影失敗：%v", err)
 	}
-	// 3 つの安定錨点（user/cred/ip）各 1 命中。
+	// 3 个稳定锚点（user/cred/ip）各 1 命中。
 	if n != 3 {
 		t.Fatalf("命中数 = %d，期望 3", n)
 	}
@@ -47,14 +47,14 @@ func TestSecurityFindingBurstOpensCase(t *testing.T) {
 	}
 	var linked int
 	if err := db.Get(&linked, `SELECT count(*) FROM security_case_link`); err != nil || linked < 1 {
-		t.Fatalf("案件証拠リンク = %d", linked)
+		t.Fatalf("案件证据链接 = %d", linked)
 	}
 	var notices int
 	if err := db.Get(&notices, `SELECT count(*) FROM security_notification WHERE kind='security.case_opened'`); err != nil || notices < 1 {
 		t.Fatalf("自動建案通知 = %d", notices)
 	}
 
-	// 再投影：同じ事実を再計算しても命中・案件は増えない（決定的 ID + OR IGNORE）。
+	// 重复投影：相同事实重算不增命中/案件（确定性 ID + OR IGNORE）。
 	n2, err := fs.RunBatch(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +64,6 @@ func TestSecurityFindingBurstOpensCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n2 != 0 || total != 3 {
-		t.Fatalf("再投影で増加: 新規=%d 計=%d", n2, total)
+		t.Fatalf("重复投影后增加: 新=%d 计=%d", n2, total)
 	}
 }

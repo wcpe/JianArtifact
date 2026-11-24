@@ -88,7 +88,7 @@ func (h *CargoHandler) Put(c *gin.Context) {
 		var result *domain.CargoPublishResult
 		var err error
 		if p, hasP := auth.PrincipalFrom(c); hasP && h.cargo.HasAdmission() {
-			// FR-169：crate 字节走私有候选准入（封存→裁定→提升）。
+			// 安全治理：crate 字节走私有候选准入（封存→裁定→提升）。
 			result, err = h.cargo.PublishViaAdmission(c.Request.Context(), p, repoName, c.Request.Body, guard)
 		} else {
 			result, err = h.cargo.PublishWithGuard(c.Request.Context(), repoName, c.Request.Body, guard)

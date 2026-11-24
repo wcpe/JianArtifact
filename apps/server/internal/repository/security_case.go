@@ -8,7 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// SecurityCaseRow 是 security_case 的持久投影（FR-171）。
+// SecurityCaseRow 是 security_case 的持久投影。
 type SecurityCaseRow struct {
 	CaseID        string `db:"case_id"`
 	Title         string `db:"title"`
@@ -89,7 +89,7 @@ type SecurityCaseReadRow struct {
 	ReadUnix    int64  `db:"read_unix"`
 }
 
-// MarkCaseReadTx は本人既読水位を max(seen_version) に進める（同版本重放冪等）。
+// MarkCaseReadTx 将本人已读水位推进到 max(seen_version)（同版本重放幂等）。
 func MarkCaseReadTx(ctx context.Context, tx *sqlx.Tx, caseID string, userID, seenVersion, now int64) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO security_case_read (case_id,user_id,seen_version,read_unix)
 		VALUES (?,?,?,?)
@@ -100,14 +100,14 @@ func MarkCaseReadTx(ctx context.Context, tx *sqlx.Tx, caseID string, userID, see
 	return nil
 }
 
-// CaseReadTx は本人既読水位を返す（無ければ seen_version=0）。
+// CaseReadTx 返回本人已读水位（无记录则 seen_version=0）。
 func CaseReadTx(ctx context.Context, tx *sqlx.Tx, caseID string, userID int64) (SecurityCaseReadRow, error) {
 	var r SecurityCaseReadRow
 	err := tx.GetContext(ctx, &r, `SELECT case_id,user_id,seen_version,read_unix FROM security_case_read WHERE case_id=? AND user_id=?`, caseID, userID)
 	return r, err
 }
 
-// ---- FR-171 案件四栏详情 ----
+// ---- 安全治理 案件四栏详情 ----
 
 // SecurityCaseTimelineRow timeline 栏：关联事件按时序。
 type SecurityCaseTimelineRow struct {

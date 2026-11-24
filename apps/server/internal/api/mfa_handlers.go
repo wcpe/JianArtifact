@@ -109,6 +109,15 @@ func (h *Handlers) BeginMfaEnroll(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	// 已有激活因子的账号再登记等同换绑：确认会退役旧因子，必须近期强认证。
+	st, err := h.mfa.Status(c.Request.Context(), p.UserID)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	if st.Enrolled && !h.requireRecentMfa(c, p) {
+		return
+	}
 	en, err := h.mfa.BeginFactorEnrollment(c.Request.Context(), account, "session", p.SessionID)
 	if err != nil {
 		writeDomainErr(c, err)

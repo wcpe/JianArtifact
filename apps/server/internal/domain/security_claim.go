@@ -192,6 +192,7 @@ func (s *SecurityMfaService) RedeemClaimTicket(ctx context.Context, username, pa
 		return nil, ErrMfaFactorUnavailable
 	}
 	var out *MfaEnrollment
+	var bindFailTicket string
 	err = s.factors.Write(ctx, func(tx *sqlx.Tx) error {
 		now := s.now().Unix()
 		t, err := repository.TouchClaimTicketTx(ctx, tx, tokenHash, repository.ClaimPurposeAdmin, now)
@@ -199,8 +200,9 @@ func (s *SecurityMfaService) RedeemClaimTicket(ctx context.Context, username, pa
 			return err
 		}
 		if t.UserID == nil || *t.UserID != account.ID || t.AccountEpoch != account.Epoch {
-			// 绑定不符记一次票尝试；扣减独立提交不因拒绝丢账。
-			_, _ = repository.FailClaimTicketAttemptTx(ctx, tx, t.TicketID, now)
+			// 绑定不符：记下票号，本事务回滚后由独立写事务提交尝试扣减——
+			// 与错误同事务的扣减会随回滚丢失，尝试预算永不消耗。
+			bindFailTicket = t.TicketID
 			return repository.ErrSecurityChallengeRejected
 		}
 		if err := repository.RetireTotpFactorsTx(ctx, tx, account.ID, now, repository.TotpFactorStatePending); err != nil {
@@ -236,6 +238,13 @@ func (s *SecurityMfaService) RedeemClaimTicket(ctx context.Context, username, pa
 		return nil
 	})
 	if err != nil {
+		if bindFailTicket != "" {
+			// 独立写事务提交票尝试扣减；与拒绝同事务会随回滚丢账。
+			_ = s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+				_, werr := repository.FailClaimTicketAttemptTx(ctx, tx, bindFailTicket, s.now().Unix())
+				return werr
+			})
+		}
 		return nil, mapChallengeErr(err)
 	}
 	return out, nil

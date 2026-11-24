@@ -1,4 +1,4 @@
-// FR-171 风险调查页：安全事件队列（多维度关联筛选）+ 案件列表与认领/结案。
+// 安全治理 风险调查页：安全事件队列（多维度关联筛选）+ 案件列表与认领/结案。
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Alert, Anchor, Box, Button, Table, Text, TextInput } from "@mantine/core";

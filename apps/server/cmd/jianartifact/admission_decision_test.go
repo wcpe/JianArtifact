@@ -22,7 +22,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// TestAdmissionDecisionEndToEnd 覆盖 FR-169 最小流水线：私有候选→检测→待审→管理员批准提升为公开资产/驳回保持私有。
+// TestAdmissionDecisionEndToEnd 覆盖 安全治理 最小流水线：私有候选→检测→待审→管理员批准提升为公开资产/驳回保持私有。
 func TestAdmissionDecisionEndToEnd(t *testing.T) {
 	cfg, app := newSourceTestApplication(t, "raw")
 	const ownerName, adminName = "decide-owner", "decide-admin"
@@ -164,7 +164,7 @@ func TestAdmissionDecisionEndToEnd(t *testing.T) {
 	download("rejected.txt", http.StatusNotFound)
 	decide(rejected, "approve", adminToken, http.StatusConflict)
 
-	// FR-170 确认令牌：伪造令牌 409 security_confirmation_stale；已用令牌重放同 409。
+	// 安全治理 确认令牌：伪造令牌 409 security_confirmation_stale；已用令牌重放同 409。
 	stale := prepare("stale.txt", "伪造令牌字节")
 	if st := state(stale, ownerToken); st != "awaiting_review" {
 		t.Fatalf("伪造令牌用例候选应待审：%s", st)

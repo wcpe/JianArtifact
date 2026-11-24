@@ -1,4 +1,4 @@
--- FR-169 准入裁决：放宽候选状态机（awaiting_review/published），记录人工驳回与提升资产号。
+-- 安全治理 准入裁决：放宽候选状态机（awaiting_review/published），记录人工驳回与提升资产号。
 CREATE TABLE private_admission_candidate_v2 (
     operation_id TEXT PRIMARY KEY,
     object_key TEXT NOT NULL UNIQUE,
