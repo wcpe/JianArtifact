@@ -209,7 +209,7 @@ func (s *SecurityMfaService) BeginFactorEnrollment(ctx context.Context, account 
 // 读事务只取挑战与因子状态，口令比对在锁外；命中走条件写（消耗步、消费挑战、
 // 退役旧因子、激活新因子、签发恢复码），未命中走独立的尝试扣减事务——
 // 失败也必须落额度扣减，不能随验证错误回滚。
-func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID int64, challengeToken, otp string) ([]string, error) {
+func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID int64, challengeToken, otp, sessionBinding string) ([]string, error) {
 	now := s.now().Unix()
 	var challenge repository.SecurityAuthChallenge
 	var factor repository.SecurityTotpFactor
@@ -219,6 +219,10 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID
 			return err
 		}
 		if c.UserID != userID {
+			return repository.ErrSecurityChallengeRejected
+		}
+		// 会话绑定只存不验即为空检查：签发时绑定的会话与确认方必须一致。
+		if c.SessionBinding != "" && c.SessionBinding != sessionBinding {
 			return repository.ErrSecurityChallengeRejected
 		}
 		f, err := repository.TotpFactorByUserTx(ctx, tx, userID, repository.TotpFactorStatePending)
@@ -258,6 +262,15 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID
 	}
 	var codes []string
 	err = s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+		// 挑战绑定签发时的账号代次：其间任何账号级安全变更（改密/恢复/处置）
+		// 都使在途挑战作废，不能把旧代次的授权延续到新一代。
+		var epoch int64
+		if err := tx.GetContext(ctx, &epoch, `SELECT account_epoch FROM user WHERE id=?`, userID); err != nil {
+			return err
+		}
+		if epoch != challenge.AccountEpoch {
+			return repository.ErrSecurityChallengeRejected
+		}
 		// 登记验证消耗该因子步；先退役旧激活因子再激活，保证「唯一 active」不被并发冲破。
 		if err := repository.AcceptTotpStepTx(ctx, tx, factor.FactorID, step); err != nil {
 			return err
