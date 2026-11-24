@@ -2,7 +2,7 @@
 // + Mantine Table（完整时间 / 操作者邮箱 / 动作+方法路径 / 状态码 / 耗时 / 客户端 IP / 详情）。
 // 全部筛选走服务端（关键字、动作、操作者邮箱、客户端 IP、请求方法、认证方式、结果、风险状态）。
 import { useMediaQuery } from "@mantine/hooks";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Badge,
@@ -17,6 +17,7 @@ import {
   Select,
   Card,
   Checkbox,
+  Collapse,
   Table,
   Text,
   TextInput,
@@ -24,6 +25,7 @@ import {
 import { DatePickerInput } from "@mantine/dates";
 import {
   IconChevronDown,
+  IconChevronRight,
   IconChevronUp,
   IconCornerDownRight,
   IconEye,
@@ -116,6 +118,11 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
     {},
   );
   const [ipDraft, setIpDraft] = useState(model.filters.clientIp ?? "");
+  // 外部联动（KPI 卡等）改写 filters 时同步回显；否则卡片清掉的 IP 残留在
+  // 输入框，下次失焦又把旧值写回筛选。
+  useEffect(() => {
+    setIpDraft(model.filters.clientIp ?? "");
+  }, [model.filters.clientIp]);
   const { records, filters, setFilters, actorFacets, emailFacets } = model;
   // 窄屏：高级筛选收起，默认只留关键字那行。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
@@ -491,29 +498,30 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
             <Table layout="fixed" highlightOnHover verticalSpacing={8} horizontalSpacing="md">
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th w={isNarrow ? 78 : 168} style={STICKY_HEADER}>
+                  <Table.Th w={isNarrow ? 78 : 150} style={STICKY_HEADER}>
                     {t("auditWorkbench.colTime")}
                   </Table.Th>
                   {isNarrow ? null : (
-                    <Table.Th w={190} style={STICKY_HEADER}>
+                    <Table.Th w={168} style={STICKY_HEADER}>
                       {t("auditWorkbench.colActor")}
                     </Table.Th>
                   )}
-                  <Table.Th style={STICKY_HEADER}>{t("auditWorkbench.colAction")}</Table.Th>
-                  <Table.Th w={60} style={STICKY_HEADER}>
+                  <Table.Th style={STICKY_HEADER}>{t("auditWorkbench.colTarget")}</Table.Th>
+                  {/* 结果列要容纳 Badge（401 / 500 / —），60px 在 fixed 布局下会把徽章压扁。 */}
+                  <Table.Th w={isNarrow ? 64 : 84} style={STICKY_HEADER}>
                     {t("auditWorkbench.colStatus")}
                   </Table.Th>
                   {isNarrow ? null : (
-                    <Table.Th w={80} style={STICKY_HEADER}>
+                    <Table.Th w={76} style={STICKY_HEADER}>
                       {t("auditWorkbench.colDuration")}
                     </Table.Th>
                   )}
                   {isNarrow ? null : (
-                    <Table.Th w={132} style={STICKY_HEADER}>
+                    <Table.Th w={124} style={STICKY_HEADER}>
                       {t("auditWorkbench.colClientIp")}
                     </Table.Th>
                   )}
-                  <Table.Th w={104} style={STICKY_HEADER}>
+                  <Table.Th w={96} style={STICKY_HEADER}>
                     {t("auditWorkbench.colOperation")}
                   </Table.Th>
                 </Table.Tr>
@@ -617,6 +625,40 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
   );
 }
 
+/**
+ * 风险批次标记：该事件属于服务端签发的风险关注批次时，列表中直接可见并可一键进入。
+ * 此前只有展开详情后才有「查看批次」，列表层看不出哪些事件被归入风险批次。
+ *
+ * 按钮本身在可点击的表格行内部：onKeyDown 必须 stopPropagation，
+ * 否则行的键盘处理器会 preventDefault + 触发行切换，按钮的 Enter/空格激活被吃掉。
+ */
+function RiskBadge({
+  attentionId,
+  onOpenAttention,
+}: {
+  attentionId: string;
+  onOpenAttention: (attentionId: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Badge
+      size="xs"
+      variant="filled"
+      color="orange"
+      component="button"
+      style={{ flexShrink: 0, cursor: "pointer" }}
+      onClick={(clickEvent) => {
+        clickEvent.stopPropagation();
+        onOpenAttention(attentionId);
+      }}
+      onKeyDown={(keyEvent) => keyEvent.stopPropagation()}
+      title={t("auditWorkbench.riskOpen")}
+    >
+      {t("auditWorkbench.riskBadge")}
+    </Badge>
+  );
+}
+
 function EventRow({
   event,
   expanded,
@@ -638,13 +680,18 @@ function EventRow({
   const isHigh = event.severity === "high" || event.severity === "critical";
   const http = event.http as { method?: string; path?: string; statusCode?: number } | undefined;
   const targetText = asTextLabel(event);
-  // 制品事件优先展示制品路径（repo/path）；其余事件沿用「方法 + 路由模板」的既有副文本。
+  // 主列是「改了什么」，因此目标 label 必须优先于路由模板：
+  // 此前顺序是 artifact → http.path → target.label，导致「更新设置」这类事件的主行
+  // 显示 `PUT /api/v1/settings` 而不是真正的目标「匿名访问设置」——读者得自己从
+  // 路由反推改了什么。路由模板只在没有语义化目标时兜底。
+  const label = eventTarget(event)?.label;
   const rowTarget =
     artifactLabel(event) ??
+    (label && label.length > 0 ? label : null) ??
     (http?.path ? `${requestMethod(http.method)} ${http.path}` : targetText);
   const email = actorEmail(event.actor);
   const actorName = actorText(event.actor, t);
-
+  const attentionId = event.attention?.attentionId;
   return (
     <>
       <Table.Tr
@@ -680,21 +727,29 @@ function EventRow({
         )}
         <Table.Td>
           <Group gap={6} wrap="nowrap">
-            <Text size="sm" truncate style={{ minWidth: 0 }}>
-              {actionLabel(event.action, t)}
+            {/* 目标（改了什么）是审计排查的第一信息，独占主行；动作作为前置小标签。
+                此前主行给的是动作名，目标被压成灰色副文本，排查时得先读动作再去找目标。 */}
+            <Text size="sm" truncate title={rowTarget} style={{ minWidth: 0, fontWeight: 600 }}>
+              {rowTarget}
             </Text>
             {isHigh ? (
               <Badge size="xs" variant="light" color="red" style={{ flexShrink: 0 }}>
                 {t("auditWorkbench.severityHigh")}
               </Badge>
             ) : null}
+            {attentionId ? (
+              <RiskBadge attentionId={attentionId} onOpenAttention={onOpenAttention} />
+            ) : null}
           </Group>
-          <Text size="xs" c="dimmed" truncate title={rowTarget}>
-            {rowTarget}
+          {/* 谁 + 做了什么 + 什么时候：审计排查的核心三要素，直接铺在列表行上，
+              不必逐条展开详情。summary 是服务端脱敏后的一句话结论。 */}
+          <Text size="xs" c="dimmed" truncate title={event.summary}>
+            {actorText(event.actor, t)} · {actionLabel(event.action, t)} ·{" "}
+            {isNarrow ? formatClock(event.occurredAt) : formatTableTime(event.occurredAt)}
           </Text>
-          {isNarrow ? (
-            <Text size="xs" c="dimmed" truncate title={`${email} · ${actorName}`}>
-              {email} · {formatDuration(event.durationMs)} · {event.clientIp ?? "—"}
+          {event.summary ? (
+            <Text size="xs" truncate title={event.summary} style={{ lineHeight: 1.5 }}>
+              {event.summary}
             </Text>
           ) : null}
         </Table.Td>
@@ -786,13 +841,24 @@ function OperationRow({
   const http = head.http as { method?: string; path?: string; statusCode?: number } | undefined;
   const email = actorEmail(head.actor);
   const actorName = actorText(head.actor, t);
-  // 副文本口径与单事件行相同：制品事件优先 repo/path，其余回退「方法 + 路由模板」。
+  // 副文本口径与单事件行相同：制品路径优先，其次语义化目标 label，最后才回退「方法 + 路由模板」。
+  const headLabel = eventTarget(head)?.label;
   const rowTarget =
     artifactLabel(head) ??
+    (headLabel && headLabel.length > 0 ? headLabel : null) ??
     (http?.path ? `${requestMethod(http.method)} ${http.path}` : asTextLabel(head));
   const fileCount = operationFileCount(operation);
   // 徽章只报「另有几个文件」：行上已经展示了最新那个文件，+N 是折叠掉的其余 N 个。
   const collapsedCount = Math.max(fileCount - 1, 0);
+  // 折叠行同样给风险批次入口：成员事件可能分属不同批次（同目录多条删除失败
+  // 可被分到不同批次），按去重后的全部批次各给一个徽章，不遗漏其余批次。
+  const attentionIds = [
+    ...new Set(
+      operation.events
+        .map((event) => event.attention?.attentionId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
 
   return (
     <>
@@ -846,6 +912,15 @@ function OperationRow({
           <Text size="xs" c="dimmed" truncate title={rowTarget}>
             {rowTarget}
           </Text>
+          {/* 批次徽章独立成行并可换行：同目录不同批次可能并存多枚，
+              塞在 nowrap 主行里会被裁掉、窄屏下直接点不到。 */}
+          {attentionIds.length > 0 ? (
+            <Group gap={4} wrap="wrap" mt={2}>
+              {attentionIds.map((id) => (
+                <RiskBadge key={id} attentionId={id} onOpenAttention={onOpenAttention} />
+              ))}
+            </Group>
+          ) : null}
           {isNarrow ? (
             <Text size="xs" c="dimmed" truncate title={`${email} · ${actorName}`}>
               {email} · {formatDuration(head.durationMs)} · {head.clientIp ?? "—"}
@@ -1006,16 +1081,19 @@ function artifactLabel(event: AuditEvent): string | null {
 }
 
 /**
- * 目标文本（兜底）：制品事件优先展示制品路径；其余维持既有语义——
- * 先路由模板，再目标 label/repository。
+ * 目标文本（兜底）：制品事件优先展示制品路径；其余按「目标 → 路由模板」取。
  */
 function asTextLabel(event: AuditEvent): string {
   const artifact = artifactLabel(event);
   if (artifact) return artifact;
+  // 与详情展示同一口径：目标名优先于接口路径——「调查该目标」搜的应该是
+  // 读者看到的那个目标，而不是共享该路由模板的接口。
+  const target = eventTarget(event);
+  if (target?.label) return target.label;
+  if (target?.repository) return target.repository;
   const http = event.http as { path?: string } | undefined;
   if (http?.path) return http.path;
-  const target = eventTarget(event);
-  return target?.label ?? target?.repository ?? "—";
+  return "—";
 }
 
 /**
@@ -1060,6 +1138,8 @@ function EventDetail({
   onOpenAttention: (attentionId: string) => void;
 }) {
   const { t } = useTranslation();
+  // 排障上下文（请求 ID / UA / 令牌 / 请求头 / 请求体）默认折叠，按需展开。
+  const [contextOpen, setContextOpen] = useState(false);
   const detailData = detail && detail !== "loading" ? detail : null;
   const attentionId = event.attention?.attentionId;
   const http = event.http as
@@ -1096,24 +1176,57 @@ function EventDetail({
     : [];
   // 请求组标题：请求头 / 请求体任一存在才渲染，避免空分组。
   const hasRequestBody = Boolean(http?.httpHeaders || http?.bodyPreview);
+  // 排障上下文：任一技术字段存在才给出展开入口，避免无内容的空按钮。
+  const hasContext = Boolean(
+    http?.requestId || http?.tokenPreview || http?.userAgent || hasRequestBody,
+  );
 
   return (
     <Box p="sm" m="sm" style={{ background: "var(--mantine-color-gray-0)", borderRadius: 8 }}>
-      {/* 头部：状态码 + 动作 + 方法 + 路径（制品事件展示制品路径，其余为路由模板） */}
-      <Group gap="xs" wrap="wrap" mb="xs">
+      {/* 目标行：状态 + 动作 + 目标 + 请求方法与接口。请求方法与接口是排障必读项，
+          此前被我折进「技术细节」里，等于把主信息藏起来了，这里恢复常显。 */}
+      <Group gap="xs" wrap="wrap" mb={6}>
         <Badge size="sm" variant="light" color={statusTone(http?.statusCode)}>
           {http?.statusCode ?? "—"} {t(RESULT_LABEL_KEYS[event.result] ?? event.result)}
         </Badge>
-        <Text size="sm" fw={600}>
+        <Text size="sm" fw={700} style={{ overflowWrap: "anywhere" }}>
           {actionLabel(event.action, t)}
+        </Text>
+        <Text size="sm" style={{ overflowWrap: "anywhere" }}>
+          {artifactPath ?? eventTarget(event)?.label ?? http?.path ?? "—"}
         </Text>
         <Badge size="xs" variant="default">
           {requestMethod(http?.method)}
         </Badge>
-        <Text size="xs" style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
-          {artifactPath ?? http?.path ?? "—"}
-        </Text>
+        {/* 接口路径：制品事件的目标已经是具体文件路径，此时路由模板（/repository/:repo/*）
+            只是协议噪声，不再重复展示；非制品事件则用它补齐「打的哪个接口」。 */}
+        {http?.path && !artifactPath ? (
+          <Text size="xs" c="dimmed" style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
+            {http.path}
+          </Text>
+        ) : null}
       </Group>
+
+      {/* 结果概述：服务端给出的「一句话结论 + 错误类别」。
+          这一段是全详情里唯一依赖 getAuditEvent 的部分（列表事件已含其余全部字段），
+          因此只有它随详情请求异步补齐，其余内容立即渲染——展开不再整块等一个网络往返。 */}
+      <Box mb="xs">
+        {detailData ? (
+          <Text size="sm" style={{ lineHeight: 1.7 }}>
+            {details.resultSummary ?? event.summary ?? "—"}
+            {details.errorClass ? (
+              <Text span size="xs" c="dimmed" ml={6}>
+                （{details.errorClass}）
+              </Text>
+            ) : null}
+          </Text>
+        ) : (
+          // 详情未就绪时先展示列表已有的 summary，避免整行空白等待。
+          <Text size="sm" c={event.summary ? undefined : "dimmed"} style={{ lineHeight: 1.7 }}>
+            {event.summary ?? t("auditWorkbench.detailLoading")}
+          </Text>
+        )}
+      </Box>
 
       {/* 性能组：时间与总耗时、服务端耗时并列，便于对照链路开销 */}
       <DetailGroupLabel>{t("auditWorkbench.detailGroupPerformance")}</DetailGroupLabel>
@@ -1130,10 +1243,6 @@ function EventDetail({
       <OpsDetailGrid
         items={[
           {
-            label: t("auditWorkbench.detailRequestId"),
-            value: <span style={{ fontFamily: "monospace" }}>{http?.requestId ?? "—"}</span>,
-          },
-          {
             label: t("auditWorkbench.detailActor"),
             value: `${email} / ${actorText(event.actor, t)}`,
           },
@@ -1141,91 +1250,112 @@ function EventDetail({
             label: t("auditWorkbench.filterAuthSource"),
             value: authSourceText(actor?.authSource, t),
           },
-          { label: t("auditWorkbench.detailToken"), value: http?.tokenPreview ?? "—" },
           { label: t("auditWorkbench.colClientIp"), value: event.clientIp ?? "—" },
-          { label: t("auditWorkbench.detailUserAgent"), value: http?.userAgent ?? "—" },
         ]}
       />
 
-      {/* 结果摘要 */}
-      <Box mt="xs">
-        {detailData ? (
-          <Text size="xs" style={{ lineHeight: 1.9 }}>
-            {t("auditWorkbench.detailResultSummary", {
-              summary: details.resultSummary ?? "—",
-              errorClass: details.errorClass ?? "—",
-              affected: details.affectedCount ?? 0,
-            })}
-          </Text>
-        ) : (
-          <Text size="xs" c="dimmed">
-            {t("auditWorkbench.detailLoading")}
-          </Text>
-        )}
-      </Box>
+      {/*
+ 排障上下文（请求 ID / UA / 令牌 / 请求头 / 请求体）默认折叠：
+          这些字段只在真正排查单条请求时才需要，全量铺开会让一次普通设置变更
+          也撑出十几行，反而盖住「谁做了什么」这一层信息。 */}
+      {hasContext ? (
+        <>
+          <Button
+            mt="xs"
+            size="compact-xs"
+            variant="subtle"
+            onClick={() => setContextOpen((value) => !value)}
+            aria-expanded={contextOpen}
+            leftSection={
+              contextOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />
+            }
+          >
+            {contextOpen
+              ? t("auditWorkbench.drawerHideContext")
+              : t("auditWorkbench.drawerShowContext")}
+          </Button>
+          <Collapse expanded={contextOpen}>
+            <Box mt="xs">
+              <DetailGroupLabel>{t("auditWorkbench.detailGroupContext")}</DetailGroupLabel>
+              <OpsDetailGrid
+                items={[
+                  {
+                    label: t("auditWorkbench.detailRequestId"),
+                    value: (
+                      <span style={{ fontFamily: "monospace" }}>{http?.requestId ?? "—"}</span>
+                    ),
+                  },
+                  { label: t("auditWorkbench.detailToken"), value: http?.tokenPreview ?? "—" },
+                  { label: t("auditWorkbench.detailUserAgent"), value: http?.userAgent ?? "—" },
+                ]}
+              />
 
-      {/* 请求组：请求头与请求体（均等宽展示，两者都缺省时整组不渲染） */}
-      {hasRequestBody ? (
-        <DetailGroupLabel>{t("auditWorkbench.detailGroupRequest")}</DetailGroupLabel>
-      ) : null}
+              {/* 请求组：请求头与请求体（均等宽展示，两者都缺省时整组不渲染） */}
+              {hasRequestBody ? (
+                <DetailGroupLabel>{t("auditWorkbench.detailGroupRequest")}</DetailGroupLabel>
+              ) : null}
 
-      {/* 请求头（白名单已过滤）：键名等宽原样展示（User-Agent 等不翻译），值 pre-wrap 换行可看全 */}
-      {http?.httpHeaders ? (
-        <Box mb="xs">
-          <Text size="xs" c="dimmed" mb={4}>
-            {t("auditWorkbench.detailHeaders")}
-          </Text>
-          <Card withBorder radius="sm" padding="xs">
-            {headerEntries ? (
-              headerEntries.map(([name, value]) => (
-                <Text
-                  key={name}
-                  size="xs"
-                  style={{
-                    fontFamily: "monospace",
-                    whiteSpace: "pre-wrap",
-                    overflowWrap: "anywhere",
-                  }}
-                >
-                  <span style={{ fontWeight: 600 }}>{name}</span>: {value}
-                </Text>
-              ))
-            ) : (
-              // JSON 解析失败兜底：原样展示原始文本（含中文说明注释），不静默丢内容。
-              <Text
-                size="xs"
-                style={{
-                  fontFamily: "monospace",
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {http.httpHeaders}
-              </Text>
-            )}
-          </Card>
-        </Box>
-      ) : null}
+              {/* 请求头（白名单已过滤）：键名等宽原样展示（User-Agent 等不翻译），值 pre-wrap 换行可看全 */}
+              {http?.httpHeaders ? (
+                <Box mb="xs">
+                  <Text size="xs" c="dimmed" mb={4}>
+                    {t("auditWorkbench.detailHeaders")}
+                  </Text>
+                  <Card withBorder radius="sm" padding="xs">
+                    {headerEntries ? (
+                      headerEntries.map(([name, value]) => (
+                        <Text
+                          key={name}
+                          size="xs"
+                          style={{
+                            fontFamily: "monospace",
+                            whiteSpace: "pre-wrap",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{name}</span>: {value}
+                        </Text>
+                      ))
+                    ) : (
+                      // JSON 解析失败兜底：原样展示原始文本（含中文说明注释），不静默丢内容。
+                      <Text
+                        size="xs"
+                        style={{
+                          fontFamily: "monospace",
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {http.httpHeaders}
+                      </Text>
+                    )}
+                  </Card>
+                </Box>
+              ) : null}
 
-      {/* 请求体（已脱敏） */}
-      {http?.bodyPreview ? (
-        <Box mb="xs">
-          <Text size="xs" c="dimmed" mb={4}>
-            {t("auditWorkbench.detailRequestBody")}
-          </Text>
-          <Card withBorder radius="sm" padding="xs">
-            <Text
-              size="xs"
-              style={{
-                fontFamily: "monospace",
-                whiteSpace: "pre-wrap",
-                overflowWrap: "anywhere",
-              }}
-            >
-              {http.bodyPreview}
-            </Text>
-          </Card>
-        </Box>
+              {/* 请求体（已脱敏） */}
+              {http?.bodyPreview ? (
+                <Box mb="xs">
+                  <Text size="xs" c="dimmed" mb={4}>
+                    {t("auditWorkbench.detailRequestBody")}
+                  </Text>
+                  <Card withBorder radius="sm" padding="xs">
+                    <Text
+                      size="xs"
+                      style={{
+                        fontFamily: "monospace",
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {http.bodyPreview}
+                    </Text>
+                  </Card>
+                </Box>
+              ) : null}
+            </Box>
+          </Collapse>
+        </>
       ) : null}
 
       <Group gap="xs" mt="sm">

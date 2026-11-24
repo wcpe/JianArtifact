@@ -322,11 +322,25 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		args = append(args, repoArgs...)
 	}
 	if f.Query != "" {
+		// 列侧折叠函数的选取：内置 LOWER() 只折 ASCII，而 Go 侧 ToLower 会连 É→é
+		// 一起折——只下小写针时「Équipe QA」这类记录搜不到，故非 ASCII 针必须走
+		// 持久层注册的 unicode_lower。纯 ASCII 针两种折叠产生同一结果集（Unicode
+		// 折叠不会把非 ASCII 折成 ASCII），此时改用内置 LOWER()，避免对每行每列
+		// 发起一次 Go 回调——30 天量级的审计行数会让搜索延迟不可忽略。
 		needle := "%" + strings.ToLower(strings.TrimSpace(f.Query)) + "%"
-		query += " AND (LOWER(action) LIKE ? OR LOWER(detail) LIKE ? OR LOWER(entity_key) LIKE ?" +
-			" OR LOWER(entity_type) LIKE ? OR LOWER(actor) LIKE ? OR LOWER(actor_email) LIKE ?" +
-			" OR LOWER(http_path) LIKE ? OR LOWER(client_ip) LIKE ? OR LOWER(user_agent) LIKE ?)"
-		args = append(args, needle, needle, needle, needle, needle, needle, needle, needle, needle)
+		lower := "LOWER"
+		if !isASCIIString(needle) {
+			lower = "unicode_lower"
+		}
+		var needleClauses []string
+		for _, col := range []string{
+			"action", "detail", "entity_key", "entity_type", "actor",
+			"actor_email", "http_path", "client_ip", "user_agent",
+		} {
+			needleClauses = append(needleClauses, lower+"("+col+") LIKE ?")
+			args = append(args, needle)
+		}
+		query += " AND (" + strings.Join(needleClauses, " OR ") + ")"
 	}
 	if f.Method != "" {
 		query += " AND http_method = ?"
@@ -351,10 +365,17 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 	if f.Attention == "pending" || f.Attention == "acknowledged" {
 		const ackExists = `EXISTS (SELECT 1 FROM audit_attention_ack ack
 			WHERE ack.source = observability_events.source AND ack.source_event_id = observability_events.source_event_id)`
+		// 确认语义只作用于风险成员（失败或高危动作）；普通成功事件从不属于批次，
+		// 不限定风险谓词会让 pending 退回「全部未确认事件」，把批次淹没在噪声里。
+		// 高危动作清单与 api.isHighRisk 保持一致。
+		const riskClause = `(result IN (` + failureResultSet + `) OR action IN (
+			'repository.delete', 'repo.delete', 'asset.delete', 'user.delete', 'token.revoke',
+			'acl.set', 'settings.update', 'setting.set', 'migration.switch', 'migration.complete',
+			'group.delete', 'group.member.add', 'group.member.remove'))`
 		if f.Attention == "pending" {
-			query += " AND NOT " + ackExists
+			query += " AND " + riskClause + " AND NOT " + ackExists
 		} else {
-			query += " AND " + ackExists
+			query += " AND " + riskClause + " AND " + ackExists
 		}
 	}
 	if clause, values := observabilityCategoryClause(f.Categories); clause != "" {
@@ -368,6 +389,21 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 	return query, args
 }
 
+// isASCIIString 报告串是否只含 ASCII 字符（关键词针选折叠函数用）。
+func isASCIIString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// failureResultSet 与 api.classifyAuditResult 的失败归类一致（含 partial 部分失败）。
+// SQL 筛选与 Go 分类必须用同一份集合：缺一端会让 result='partial' 的记录
+// 显示为失败却在「失败」筛选下消失、在「未知」下出现。
+const failureResultSet = "'failed', 'error', 'rejected', 'partial'"
+
 func observabilityCategoryClause(categories []string) (string, []any) {
 	clauses := make([]string, 0, len(categories))
 	for _, category := range categories {
@@ -375,11 +411,11 @@ func observabilityCategoryClause(categories []string) (string, []any) {
 		case "replication":
 			clauses = append(clauses, "source = 'replication'")
 		case "security_event":
-			clauses = append(clauses, "source = 'audit' AND result IN ('failed', 'error', 'rejected')")
+			clauses = append(clauses, "source = 'audit' AND result IN ("+failureResultSet+")")
 		case "asset_change":
-			clauses = append(clauses, "source = 'audit' AND result NOT IN ('failed', 'error', 'rejected') AND (action LIKE 'asset.%' OR action LIKE '%.publish' OR action LIKE '%.unpublish')")
+			clauses = append(clauses, "source = 'audit' AND result NOT IN ("+failureResultSet+") AND (action LIKE 'asset.%' OR action LIKE '%.publish' OR action LIKE '%.unpublish')")
 		case "management_change":
-			clauses = append(clauses, "source = 'audit' AND result NOT IN ('failed', 'error', 'rejected') AND action NOT LIKE 'asset.%' AND action NOT LIKE '%.publish' AND action NOT LIKE '%.unpublish'")
+			clauses = append(clauses, "source = 'audit' AND result NOT IN ("+failureResultSet+") AND action NOT LIKE 'asset.%' AND action NOT LIKE '%.publish' AND action NOT LIKE '%.unpublish'")
 		}
 	}
 	return strings.Join(clauses, " OR "), nil
@@ -392,11 +428,11 @@ func observabilityResultClause(results []string) (string, []any) {
 		case "success":
 			clauses = append(clauses, "result IN ('ok', 'applied', 'success')")
 		case "failure":
-			clauses = append(clauses, "result IN ('failed', 'error', 'rejected')")
+			clauses = append(clauses, "result IN ("+failureResultSet+")")
 		case "pending":
 			clauses = append(clauses, "result = 'pending'")
 		case "unknown":
-			clauses = append(clauses, "result NOT IN ('ok', 'applied', 'success', 'failed', 'error', 'rejected', 'pending')")
+			clauses = append(clauses, "result NOT IN ('ok', 'applied', 'success', "+failureResultSet+", 'pending')")
 		}
 	}
 	return strings.Join(clauses, " OR "), nil

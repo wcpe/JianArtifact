@@ -6,14 +6,35 @@
 package persistence
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
 	// 注册纯 Go 的 sqlite 驱动（驱动名为 "sqlite"）。
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
+
+func init() {
+	// 内置 LOWER() 只折叠 ASCII；审计搜索需要在列侧做 Unicode 大小写折叠，
+	// 否则按组名「Équipe QA」这类含非 ASCII 大写的关键词永远匹配不到原记录。
+	sqlite.MustRegisterDeterministicScalarFunction("unicode_lower", 1,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if len(args) == 0 || args[0] == nil {
+				return nil, nil
+			}
+			switch v := args[0].(type) {
+			case string:
+				return strings.ToLower(v), nil
+			case []byte:
+				return strings.ToLower(string(v)), nil
+			default:
+				return nil, fmt.Errorf("unicode_lower: 不支持的类型 %T", args[0])
+			}
+		})
+}
 
 // DB 是对 *sqlx.DB 的轻量包装，便于后续扩展（如按需注入统计钩子）。
 type DB struct {

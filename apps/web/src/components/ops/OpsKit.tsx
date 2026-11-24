@@ -118,6 +118,39 @@ export interface OpsKpiItem {
   tone?: OpsTone;
   /** 数值是否以警示色显示（如失败数 > 0）。 */
   danger?: boolean;
+  /**
+   * 是否为「主指标」：窄屏（strip 变体折叠态）只展示主指标，其余收进「更多指标」。
+   *
+   * 为什么用标记而不是下标数组：此前审计页用 `NARROW_KPI_INDEXES = [0, 2, 3, 4, 5, 10]`
+   * 硬编码位置，任何一次指标增删或重排都会静默错位（把耗时当失败指标展示），
+   * 而且看不出「哪些指标重要」这个意图本身。
+   */
+  primary?: boolean;
+  /**
+   * 点击指标后的联动动作。给了就是可点的指标（卡片整块可点，带 hover 与焦点态），
+   * 没给则保持纯展示。
+   */
+  onSelect?: () => void;
+  /** 当前该指标对应的筛选是否已生效：生效时卡片描边高亮，避免「点了但没反应」的错觉。 */
+  active?: boolean;
+  /** 可点指标的提示文案（解释点击后会做什么）。 */
+  selectHint?: string;
+}
+
+/**
+ * 可点 KPI 卡片的交互样式：整块可点、指针形状、键盘焦点可见，
+ * 生效中（active）时用主色描边 + 极浅主色底，让「当前筛选来自哪个指标」一目了然。
+ */
+function kpiSelectableStyle(active: boolean): CSSProperties {
+  return {
+    cursor: "pointer",
+    textAlign: "left",
+    width: "100%",
+    border: active ? "1px solid var(--mantine-color-blue-5)" : "1px solid transparent",
+    borderRadius: 8,
+    background: active ? "var(--mantine-color-blue-0)" : undefined,
+    transition: "background 120ms ease, border-color 120ms ease",
+  };
 }
 
 /**
@@ -152,13 +185,8 @@ export function OpsKpiBand({
               放不下时 Group 的 wrap 会让 actions 换到下一行，摘要区独占整行。 */}
           <Box style={{ flex: "1 1 320px", minWidth: 0 }}>
             <SimpleGrid cols={cols} verticalSpacing="sm" spacing={0}>
-              {items.map((item) => (
-                <Tooltip
-                  key={item.label}
-                  label={item.hint ?? item.label}
-                  position="top"
-                  openDelay={300}
-                >
+              {items.map((item) => {
+                const body = (
                   <Stack gap={2} px="sm">
                     <Group gap={4} wrap="nowrap">
                       {item.icon}
@@ -176,8 +204,30 @@ export function OpsKpiBand({
                       {item.value}
                     </Text>
                   </Stack>
-                </Tooltip>
-              ))}
+                );
+                return (
+                  <Tooltip
+                    key={item.label}
+                    label={item.selectHint ?? item.hint ?? item.label}
+                    position="top"
+                    openDelay={300}
+                  >
+                    {item.onSelect ? (
+                      <Box
+                        component="button"
+                        type="button"
+                        onClick={item.onSelect}
+                        aria-pressed={item.active}
+                        style={kpiSelectableStyle(Boolean(item.active))}
+                      >
+                        {body}
+                      </Box>
+                    ) : (
+                      <Box>{body}</Box>
+                    )}
+                  </Tooltip>
+                );
+              })}
             </SimpleGrid>
           </Box>
           {actions ? (
@@ -198,9 +248,41 @@ export function OpsKpiBand({
         </Group>
       ) : null}
       <SimpleGrid cols={cols} spacing="md" verticalSpacing="md">
-        {items.map((item) => (
-          <Tooltip key={item.label} label={item.hint ?? item.label} position="top" openDelay={300}>
-            <Card withBorder radius="md" padding="sm" style={{ height: "100%" }}>
+        {items.map((item) => {
+          const card = (
+            <Card
+              withBorder
+              radius="md"
+              padding="sm"
+              onClick={item.onSelect}
+              role={item.onSelect ? "button" : undefined}
+              tabIndex={item.onSelect ? 0 : undefined}
+              aria-pressed={item.onSelect ? Boolean(item.active) : undefined}
+              onKeyDown={
+                item.onSelect
+                  ? (keyEvent) => {
+                      if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+                        keyEvent.preventDefault();
+                        item.onSelect?.();
+                      }
+                    }
+                  : undefined
+              }
+              style={{
+                height: "100%",
+                // 交互样式先铺：danger 的后置覆盖才能保住左侧红线与浅红底，
+                // 否则 kpiSelectableStyle 的 border 简写会把红线整体抹掉。
+                ...(item.onSelect ? kpiSelectableStyle(Boolean(item.active)) : null),
+                ...(item.danger
+                  ? {
+                      // 危险指标（失败 / 高危 / 待确认 > 0）用左侧色条 + 浅红底强化：
+                      // 12 张同形卡片平铺时，纯靠红色数字很难一眼定位真正要看的那几个。
+                      borderLeft: "3px solid var(--mantine-color-red-6)",
+                      background: "var(--mantine-color-red-0)",
+                    }
+                  : null),
+              }}
+            >
               <Group gap="sm" wrap="nowrap" align="center">
                 <ThemeIcon variant="light" color={item.tone ?? "gray"} size={36} radius="md">
                   {item.icon}
@@ -222,8 +304,18 @@ export function OpsKpiBand({
                 </Stack>
               </Group>
             </Card>
-          </Tooltip>
-        ))}
+          );
+          return (
+            <Tooltip
+              key={item.label}
+              label={item.selectHint ?? item.hint ?? item.label}
+              position="top"
+              openDelay={300}
+            >
+              {card}
+            </Tooltip>
+          );
+        })}
       </SimpleGrid>
     </Box>
   );

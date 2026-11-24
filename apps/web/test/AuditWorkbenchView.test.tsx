@@ -80,6 +80,51 @@ describe("审计工作台（单列表 + 顶部 KPI）", () => {
     expect(screen.getAllByText("待确认批次").length).toBeGreaterThan(0);
   });
 
+  it("列表行直接给出「谁 · 做了什么 · 时间」与操作缩略", async () => {
+    overrideEventList([
+      customEvent({
+        eventId: "audit-row-summary",
+        target: { kind: "setting", label: "匿名访问设置" },
+        summary: "基础设置已更新",
+        http: { method: "PATCH", path: "/api/v1/settings", statusCode: 200 },
+      }),
+    ]);
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows).toHaveLength(1);
+    const text = rows[0]!.textContent ?? "";
+    // 目标置顶：不必展开就能看到改了什么。
+    expect(text).toContain("匿名访问设置");
+    // 操作缩略：服务端脱敏后的一句话结论，直接铺在列表行上。
+    expect(text).toContain("基础设置已更新");
+    // 谁 + 做了什么 + 什么时候三要素同处一行。
+    expect(text).toContain("admin");
+    expect(text).toContain("更新设置");
+  });
+
+  it("属于风险批次的事件在列表行上直接带标记，并可一键进入批次", async () => {
+    const user = userEvent.setup();
+    overrideEventList([
+      customEvent({
+        eventId: "audit-attention-row",
+        severity: "high",
+        result: "failure",
+        attention: { attentionId: "attention-row-1", state: "unacknowledged" },
+      }),
+    ]);
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows).toHaveLength(1);
+    // 不必展开详情即可看出该事件落在风险批次里。
+    const badge = await screen.findByText("风险批次");
+    expect(badge).toBeTruthy();
+    await user.click(badge);
+    // 点击后进入批次详情抽屉。
+    expect(await screen.findByRole("dialog", { name: "风险批次详情" })).toBeTruthy();
+  });
+
   it("记录区为 OpsSection 分区卡：时间范围在筛选条内，标题已移除", async () => {
     renderWorkbench();
 
@@ -144,6 +189,34 @@ describe("审计工作台（筛选与搜索）", () => {
     expect((await screen.findAllByRole("button", { name: /审计事件：/ })).length).toBeGreaterThan(
       0,
     );
+  });
+
+  it("待确认批次卡跨时间范围：从 7d+待处理+IP 回到卡片统计口径", async () => {
+    const user = userEvent.setup();
+    renderWorkbench("/audit-logs?range=7d&attention=pending&clientIp=203.0.113");
+    await screen.findByText("审计事件");
+
+    // 前置态：7 天范围 + 待处理 + 客户端 IP 草稿都在。
+    expect((screen.getByRole("radio", { name: "7d" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("客户端 IP") as HTMLInputElement).value.length).toBeGreaterThan(
+      0,
+    );
+
+    // 卡片统计口径是最近 24h 全部待确认批次：点击后对齐 24h、保留待处理、清掉 IP。
+    await user.click(screen.getByRole("button", { name: /待确认批次/ }));
+    await waitFor(() => {
+      expect((screen.getByRole("radio", { name: "24h" }) as HTMLInputElement).checked).toBe(true);
+    });
+    expect((screen.getByRole("radio", { name: "待处理" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("客户端 IP") as HTMLInputElement).value).toBe("");
+
+    // 已处卡片口径时再点一次才是取消待处理筛选。
+    await user.click(screen.getByRole("button", { name: /待确认批次/ }));
+    await waitFor(() => {
+      expect((screen.getByRole("radio", { name: "待处理" }) as HTMLInputElement).checked).toBe(
+        false,
+      );
+    });
   });
 
   it("风险状态筛选：待处理 / 已确认", async () => {
@@ -228,12 +301,26 @@ describe("审计工作台（详情：服务端耗时与请求头）", () => {
     expect(await screen.findByText("服务端耗时")).toBeTruthy();
     expect(screen.getAllByText("71 ms").length).toBeGreaterThan(0);
     expect(screen.getAllByText("96 ms").length).toBeGreaterThan(0);
-    // 请求头区块：区块标题 + 键名等宽原样展示（英文头名不翻译）+ 值渲染出来。
-    expect(screen.getByText("请求头（已过滤）")).toBeTruthy();
+
+    // 排障上下文默认收起：文本已挂载（Mantine Activity 隐藏模式）但对读者不可见。
+    const headersHeading = screen.getByText("请求头（已过滤）");
+    expect(headersHeading.closest('[aria-hidden="true"]')).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "技术细节" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    // 展开后内容真正可见（折叠壳的 aria-hidden 随展开翻转）。
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: "收起细节" })).toBeTruthy();
+    expect(headersHeading.closest('[aria-hidden="true"]')).toBeNull();
     expect(screen.getByText("Accept")).toBeTruthy();
     expect(screen.getByText("Content-Type")).toBeTruthy();
     // 头值与键名同一行（"Accept: application/json"），按包含匹配即可证明值已渲染。
     expect(screen.getAllByText(/application\/json/).length).toBeGreaterThan(0);
+
+    // 再次点击收起。
+    await user.click(screen.getByRole("button", { name: "收起细节" }));
+    expect(screen.getByRole("button", { name: "技术细节" })).toBeTruthy();
+    expect(headersHeading.closest('[aria-hidden="true"]')).toBeTruthy();
   });
 
   it("请求头 JSON 解析失败时回退展示原始文本，不静默丢内容", async () => {
@@ -254,7 +341,9 @@ describe("审计工作台（详情：服务端耗时与请求头）", () => {
     expect(rows).toHaveLength(1);
     await user.click(rows[0]!);
 
-    expect(await screen.findByText("请求头（已过滤）")).toBeTruthy();
+    // 展开「技术细节」后才断言请求头区块（与真实读者路径一致）。
+    await user.click(await screen.findByRole("button", { name: "技术细节" }));
+    expect(screen.getByText("请求头（已过滤）").closest('[aria-hidden="true"]')).toBeNull();
     // 解析失败兜底：原始文本原样可见。
     expect(screen.getByText("{not-valid-json")).toBeTruthy();
   });
@@ -271,14 +360,17 @@ describe("审计工作台（详情：服务端耗时与请求头）", () => {
     expect(rows).toHaveLength(2);
 
     // 第一条：durationServerMs=0（未进入契约路由）→ 不渲染服务端耗时；请求头缺省 → 整块不渲染。
+    // 该事件也没有请求 ID / UA / 令牌，故连「技术细节」入口都不出现（不给空按钮）。
     await user.click(rows[0]!);
-    expect(await screen.findByText("请求 ID")).toBeTruthy();
+    expect(await screen.findByText("性能")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "技术细节" })).toBeNull();
     expect(screen.queryByText("服务端耗时")).toBeNull();
     expect(screen.queryByText("请求头（已过滤）")).toBeNull();
 
     // 第二条：durationServerMs 与 httpHeaders 均缺省 → 同样不渲染。
     await user.click(rows[1]!);
-    expect(await screen.findByText("请求 ID")).toBeTruthy();
+    expect(await screen.findByText("性能")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "技术细节" })).toBeNull();
     expect(screen.queryByText("服务端耗时")).toBeNull();
     expect(screen.queryByText("请求头（已过滤）")).toBeNull();
   });
@@ -313,11 +405,29 @@ describe("审计工作台（制品路径优先于路由模板）", () => {
     expect(screen.queryByText(/repository\/:repo/)).toBeNull();
   });
 
-  it("非制品事件仍展示「方法 + 路由」副文本，展示语义不变", async () => {
+  it("非制品事件优先展示目标 label，而不是路由模板", async () => {
     overrideEventList([
       customEvent({
         eventId: "audit-setting-update",
         target: { kind: "setting", label: "系统设置" },
+        http: { method: "PATCH", path: "/api/v1/settings", statusCode: 200 },
+      }),
+    ]);
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows).toHaveLength(1);
+    // 主列是「改了什么」：有语义化目标时优先展示它。
+    // 此前展示的是 `PATCH /api/v1/settings`，读者要自己从路由反推改了什么。
+    expect(rows[0]!.textContent).toContain("系统设置");
+    expect(rows[0]!.textContent).not.toContain("PATCH /api/v1/settings");
+  });
+
+  it("目标 label 缺失时才回退到「方法 + 路由模板」", async () => {
+    overrideEventList([
+      customEvent({
+        eventId: "audit-no-target-label",
+        target: { kind: "other", label: "" },
         http: { method: "PATCH", path: "/api/v1/settings", statusCode: 200 },
       }),
     ]);
@@ -498,7 +608,8 @@ describe("审计工作台（事件流按操作折叠）", () => {
     const members = screen.getAllByRole("button", { name: /审计事件：上传制品/ });
     expect(members).toHaveLength(4);
     await user.click(members[1]!);
-    expect(await screen.findByText("请求 ID")).toBeTruthy();
+    // 详情正文出现即证明进的是同一套事件详情（该事件无排障上下文，不出现「技术细节」入口）。
+    expect(await screen.findByText("性能")).toBeTruthy();
   });
 
   it("单事件操作仍是独立一行，点击展开的仍是事件详情", async () => {
@@ -522,8 +633,9 @@ describe("审计工作台（事件流按操作折叠）", () => {
       "1 次操作 / 1 个事件",
     );
 
-    // 行点击 = 既有详情展开（不是文件清单）。
+    // 行点击 = 既有详情展开（不是文件清单）；该事件无排障上下文字段，故不出现「技术细节」入口。
     await user.click(rows[0]!);
-    expect(await screen.findByText("请求 ID")).toBeTruthy();
+    expect(await screen.findByText("性能")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "技术细节" })).toBeNull();
   });
 });
