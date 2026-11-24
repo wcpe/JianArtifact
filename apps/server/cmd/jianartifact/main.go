@@ -6,8 +6,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -626,5 +628,44 @@ func smtpNotificationMailer(c config.SMTPConfig) domain.NotificationMailer {
 		case err := <-done:
 			return err
 		}
+	}
+}
+
+// qqNotificationSender は FR-172 QQ 渠道の送信関数を返す。未設定時は nil。
+// 薄适配器：公式 BotGo 凭据未整備の間、設定端点へ {openid,title,text} を POST する。
+// 応答 2xx で送信成功、それ以外は一時エラーとして再試行対象にする。
+func qqNotificationSender(c config.QQConfig) domain.NotificationQQSender {
+	if !c.Enabled() {
+		return nil
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	type qqPayload struct {
+		Openid string `json:"openid"`
+		Title  string `json:"title"`
+		Text   string `json:"text"`
+	}
+	return func(ctx context.Context, openid, title, text string) error {
+		buf, err := json.Marshal(qqPayload{Openid: openid, Title: title, Text: text})
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(buf))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("qq endpoint %d", resp.StatusCode)
+		}
+		return nil
 	}
 }

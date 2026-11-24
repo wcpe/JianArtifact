@@ -5,6 +5,7 @@ import { http, HttpResponse } from "msw";
 
 import { mockAuditLogList, mockMetrics, mockUser } from "./handlers";
 import { securityAuditHandlers } from "./securityAudit";
+import { securityCaseHandlers } from "./securityCases";
 import {
   observabilityStore,
   type AuditCategory,
@@ -1079,6 +1080,7 @@ function mockFormatDurationHuman(seconds: number): string {
 
 export const handlers = [
   ...securityAuditHandlers,
+  ...securityCaseHandlers,
   // 安全管理路由先鉴权，其余业务路由由通用场景守卫处理。
   // 同一个前置守卫承担网速模拟，未命中场景时继续走既有路由。
   http.all("*", async ({ request }) => {

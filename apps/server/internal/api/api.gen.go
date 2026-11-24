@@ -2504,6 +2504,30 @@ func (e ListSecurityCasesParamsState) Valid() bool {
 	}
 }
 
+// Defines values for GetSecurityCaseSectionParamsSection.
+const (
+	ActionsEvidence GetSecurityCaseSectionParamsSection = "actions-evidence"
+	Identity        GetSecurityCaseSectionParamsSection = "identity"
+	Timeline        GetSecurityCaseSectionParamsSection = "timeline"
+	Uploads         GetSecurityCaseSectionParamsSection = "uploads"
+)
+
+// Valid indicates whether the value is a known member of the GetSecurityCaseSectionParamsSection enum.
+func (e GetSecurityCaseSectionParamsSection) Valid() bool {
+	switch e {
+	case ActionsEvidence:
+		return true
+	case Identity:
+		return true
+	case Timeline:
+		return true
+	case Uploads:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ReportRecoveryCheckpointJSONBodyCheckpointStatus.
 const (
 	ReportRecoveryCheckpointJSONBodyCheckpointStatusMismatch ReportRecoveryCheckpointJSONBodyCheckpointStatus = "mismatch"
@@ -4795,6 +4819,15 @@ type SecurityCaseSeverity string
 // SecurityCaseState defines model for SecurityCase.State.
 type SecurityCaseState string
 
+// SecurityCaseDetail defines model for SecurityCaseDetail.
+type SecurityCaseDetail struct {
+	Case            SecurityCase       `json:"case"`
+	Findings        []SecurityFinding  `json:"findings"`
+	Links           []SecurityCaseLink `json:"links"`
+	ReadSeenVersion *int64             `json:"readSeenVersion,omitempty"`
+	ReadUnix        *int64             `json:"readUnix,omitempty"`
+}
+
 // SecurityCaseLink defines model for SecurityCaseLink.
 type SecurityCaseLink struct {
 	CaseId     string                   `json:"caseId"`
@@ -5915,6 +5948,14 @@ type MarkSecurityCaseReadJSONBody struct {
 	SeenVersion int64 `json:"seenVersion"`
 }
 
+// GetSecurityCaseSectionParams defines parameters for GetSecurityCaseSection.
+type GetSecurityCaseSectionParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetSecurityCaseSectionParamsSection defines parameters for GetSecurityCaseSection.
+type GetSecurityCaseSectionParamsSection string
+
 // ListSecurityFindingsParams defines parameters for ListSecurityFindings.
 type ListSecurityFindingsParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -5934,6 +5975,11 @@ type RetryNotificationDeliveryJSONBody struct {
 type ListSecurityNotificationsParams struct {
 	After *int64 `form:"after,omitempty" json:"after,omitempty"`
 	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SetSecurityQQBindingJSONBody defines parameters for SetSecurityQQBinding.
+type SetSecurityQQBindingJSONBody struct {
+	Openid string `json:"openid"`
 }
 
 // BeginRecoveryIsolationJSONBody defines parameters for BeginRecoveryIsolation.
@@ -6084,6 +6130,9 @@ type TransitionSecurityCaseJSONRequestBody = SecurityCaseTransitionRequest
 
 // RetryNotificationDeliveryJSONRequestBody defines body for RetryNotificationDelivery for application/json ContentType.
 type RetryNotificationDeliveryJSONRequestBody RetryNotificationDeliveryJSONBody
+
+// SetSecurityQQBindingJSONRequestBody defines body for SetSecurityQQBinding for application/json ContentType.
+type SetSecurityQQBindingJSONRequestBody SetSecurityQQBindingJSONBody
 
 // BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
 type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
@@ -6709,6 +6758,9 @@ type ServerInterface interface {
 	// OpenSecurityCase 建案（人工或规则入口共用）
 	// (POST /api/v1/security/cases)
 	OpenSecurityCase(c *gin.Context)
+	// GetSecurityCase 案件详情（头 + 命中 + 关联 + 本人既読水位）
+	// (GET /api/v1/security/cases/{caseId})
+	GetSecurityCase(c *gin.Context, caseId string)
 	// ListSecurityCaseLinks 案件关联事件（fact/candidate）
 	// (GET /api/v1/security/cases/{caseId}/links)
 	ListSecurityCaseLinks(c *gin.Context, caseId string)
@@ -6718,6 +6770,9 @@ type ServerInterface interface {
 	// TransitionSecurityCase 认领/结案/重开案件
 	// (POST /api/v1/security/cases/{caseId}/transitions)
 	TransitionSecurityCase(c *gin.Context, caseId string)
+	// GetSecurityCaseSection 案件四栏分页（timeline/uploads/identity/actions-evidence）
+	// (GET /api/v1/security/cases/{caseId}/{section})
+	GetSecurityCaseSection(c *gin.Context, caseId string, section GetSecurityCaseSectionParamsSection, params GetSecurityCaseSectionParams)
 	// ListSecurityFindings 规则命中清单（FR-171 检测投影）
 	// (GET /api/v1/security/findings)
 	ListSecurityFindings(c *gin.Context, params ListSecurityFindingsParams)
@@ -6736,6 +6791,12 @@ type ServerInterface interface {
 	// AckSecurityNotification 确认本人通知（幂等）
 	// (PUT /api/v1/security/notifications/{noticeId}/ack)
 	AckSecurityNotification(c *gin.Context, noticeId string)
+	// DeleteSecurityQQBinding 解绑 QQ openid
+	// (DELETE /api/v1/security/qq-bindings/{userId})
+	DeleteSecurityQQBinding(c *gin.Context, userId int64)
+	// SetSecurityQQBinding 绑定管理员账号与 QQ openid（FR-172 通知渠道）
+	// (PUT /api/v1/security/qq-bindings/{userId})
+	SetSecurityQQBinding(c *gin.Context, userId int64)
 	// GetRecoveryGate 恢复隔离闸状态（管理员可读）
 	// (GET /api/v1/security/recovery)
 	GetRecoveryGate(c *gin.Context)
@@ -9742,6 +9803,31 @@ func (siw *ServerInterfaceWrapper) OpenSecurityCase(c *gin.Context) {
 	siw.Handler.OpenSecurityCase(c)
 }
 
+// GetSecurityCase operation middleware
+func (siw *ServerInterfaceWrapper) GetSecurityCase(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSecurityCase(c, caseId)
+}
+
 // ListSecurityCaseLinks operation middleware
 func (siw *ServerInterfaceWrapper) ListSecurityCaseLinks(c *gin.Context) {
 
@@ -9815,6 +9901,51 @@ func (siw *ServerInterfaceWrapper) TransitionSecurityCase(c *gin.Context) {
 	}
 
 	siw.Handler.TransitionSecurityCase(c, caseId)
+}
+
+// GetSecurityCaseSection operation middleware
+func (siw *ServerInterfaceWrapper) GetSecurityCaseSection(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "section" -------------
+	var section GetSecurityCaseSectionParamsSection
+
+	err = runtime.BindStyledParameterWithOptions("simple", "section", c.Param("section"), &section, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter section: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSecurityCaseSectionParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSecurityCaseSection(c, caseId, section, params)
 }
 
 // ListSecurityFindings operation middleware
@@ -9967,6 +10098,56 @@ func (siw *ServerInterfaceWrapper) AckSecurityNotification(c *gin.Context) {
 	}
 
 	siw.Handler.AckSecurityNotification(c, noticeId)
+}
+
+// DeleteSecurityQQBinding operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSecurityQQBinding(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteSecurityQQBinding(c, userId)
+}
+
+// SetSecurityQQBinding operation middleware
+func (siw *ServerInterfaceWrapper) SetSecurityQQBinding(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SetSecurityQQBinding(c, userId)
 }
 
 // GetRecoveryGate operation middleware
@@ -10651,6 +10832,10 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/security/notification-deliveries", wrapper.ListNotificationDeliveries)
 	router.GET(options.BaseURL+"/api/v1/security/cases", wrapper.ListSecurityCases)
 	router.POST(options.BaseURL+"/api/v1/security/cases", wrapper.OpenSecurityCase)
+	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId", wrapper.GetSecurityCase)
+	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/:section", wrapper.GetSecurityCaseSection)
+	router.DELETE(options.BaseURL+"/api/v1/security/qq-bindings/:userId", wrapper.DeleteSecurityQQBinding)
+	router.PUT(options.BaseURL+"/api/v1/security/qq-bindings/:userId", wrapper.SetSecurityQQBinding)
 	router.POST(options.BaseURL+"/api/v1/security/cases/:caseId/transitions", wrapper.TransitionSecurityCase)
 	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/links", wrapper.ListSecurityCaseLinks)
 	router.PUT(options.BaseURL+"/api/v1/security/cases/:caseId/read", wrapper.MarkSecurityCaseRead)

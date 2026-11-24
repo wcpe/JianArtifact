@@ -30,6 +30,9 @@ const AuditLogPage = lazy(() =>
 const SecurityPage = lazy(() =>
   import("../pages/SecurityPage").then((m) => ({ default: m.SecurityPage })),
 );
+const SecurityCaseDetailPage = lazy(() =>
+  import("../pages/SecurityCaseDetailPage").then((m) => ({ default: m.SecurityCaseDetailPage })),
+);
 const MigrationDetailPage = lazy(() =>
   import("../pages/MigrationDetailPage").then((m) => ({ default: m.MigrationDetailPage })),
 );
@@ -154,6 +157,16 @@ export function AppRoutes() {
               <RequireAuth>
                 <RequireAdmin>
                   <SecurityPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/security/cases/:caseId"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <SecurityCaseDetailPage />
                 </RequireAdmin>
               </RequireAuth>
             }

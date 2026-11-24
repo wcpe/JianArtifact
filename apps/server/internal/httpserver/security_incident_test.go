@@ -343,7 +343,7 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 	// 配送失敗 → 仍 pending・attempts=1・退避で再試行予約。
 	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), func(ctx context.Context, to, subject, text string) error {
 		return fmt.Errorf("dial tcp: connection refused")
-	}); err != nil || n != 1 {
+	}, nil); err != nil || n != 1 {
 		t.Fatalf("失敗派发 = %d, %v，期望 1 件", n, err)
 	}
 	row := struct {
@@ -367,7 +367,7 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), func(ctx context.Context, to, subject, text string) error {
 		gotTo = to
 		return nil
-	}); err != nil || n != 1 || gotTo != "admin@example.com" {
+	}, nil); err != nil || n != 1 || gotTo != "admin@example.com" {
 		t.Fatalf("成功派发 = %d to=%q err=%v", n, gotTo, err)
 	}
 	if err := e.db.Get(&row, `SELECT state,attempts,next_retry_unix,last_error FROM security_notification_delivery WHERE delivery_id=?`, d.DeliveryID); err != nil {
@@ -383,7 +383,7 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 		map[string]any{"title": "未設定案件", "severity": "low", "reason": "テスト2"}, &opened2); code != http.StatusOK {
 		t.Fatalf("建案2状態码 = %d", code)
 	}
-	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil); err != nil || n != 1 {
+	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil, nil); err != nil || n != 1 {
 		t.Fatalf("未設定派发 = %d, %v", n, err)
 	}
 	var st string
@@ -424,7 +424,7 @@ func TestSecurityCaseReadAndDeliveryRetry(t *testing.T) {
 	}
 
 	// 未設定 SMTP で failed 化 → 手動再試行で pending に戻る（attempts CAS）。
-	if _, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil); err != nil {
+	if _, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil, nil); err != nil {
 		t.Fatalf("派发：%v", err)
 	}
 	var dels []struct {

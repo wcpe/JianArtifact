@@ -1281,6 +1281,93 @@ paths:
           $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
         "403":
           $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/cases/{caseId}:
+    get:
+      operationId: getSecurityCase
+      summary: 案件详情（头 + 命中 + 关联 + 本人既読水位）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: 案件详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCaseDetail"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+  /api/v1/security/cases/{caseId}/{section}:
+    get:
+      operationId: getSecurityCaseSection
+      summary: 案件四栏分页（timeline/uploads/identity/actions-evidence）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema: {type: string}
+        - name: section
+          in: path
+          required: true
+          schema: {type: string, enum: [timeline, uploads, identity, actions-evidence]}
+        - name: limit
+          in: query
+          schema: {type: integer, default: 100, maximum: 200}
+      responses:
+        "200":
+          description: 分栏内容（结构随 section 变化）
+          content:
+            application/json:
+              schema: {type: object}
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+  /api/v1/security/qq-bindings/{userId}:
+    put:
+      operationId: setSecurityQQBinding
+      summary: 绑定管理员账号与 QQ openid（FR-172 通知渠道）
+      security: [bearerAuth: []]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [openid]
+              properties:
+                openid: {type: string, minLength: 3, maxLength: 64}
+      responses:
+        "204": {description: 已绑定}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/RecentMfaRequired"}
+    delete:
+      operationId: deleteSecurityQQBinding
+      summary: 解绑 QQ openid
+      security: [bearerAuth: []]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        "204": {description: 已解绑}
+        "403": {$ref: "#/components/responses/RecentMfaRequired"}
+        "404": {$ref: "#/components/responses/PrivateAdmissionNotFound"}
   /api/v1/security/cases/{caseId}/transitions:
     post:
       operationId: transitionSecurityCase
@@ -5108,6 +5195,23 @@ components:
         reason: {type: string}
         createdUnix: {type: integer, format: int64}
         updatedUnix: {type: integer, format: int64}
+    SecurityCaseDetail:
+      type: object
+      additionalProperties: false
+      required: [case, findings, links]
+      properties:
+        case:
+          $ref: "#/components/schemas/SecurityCase"
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityFinding"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityCaseLink"
+        readSeenVersion: {type: integer, format: int64}
+        readUnix: {type: integer, format: int64}
     SecurityCaseOpenRequest:
       type: object
       additionalProperties: false

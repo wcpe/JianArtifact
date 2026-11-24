@@ -177,3 +177,46 @@ func DeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string) (SecurityNo
 	err := tx.GetContext(ctx, &d, `SELECT * FROM security_notification_delivery WHERE delivery_id=?`, deliveryID)
 	return d, err
 }
+
+// ---- FR-172 QQ 渠道绑定 ----
+
+// SetQQBindingTx 写入/覆盖用户 QQ openid 绑定。
+func SetQQBindingTx(ctx context.Context, tx *sqlx.Tx, userID int64, openid string, boundUnix int64) error {
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO security_qq_binding (user_id,openid,bound_unix) VALUES (?,?,?)
+		 ON CONFLICT(user_id) DO UPDATE SET openid=excluded.openid,bound_unix=excluded.bound_unix`,
+		userID, openid, boundUnix)
+	return err
+}
+
+// DeleteQQBindingTx 解绑。
+func DeleteQQBindingTx(ctx context.Context, tx *sqlx.Tx, userID int64) (bool, error) {
+	r, err := tx.ExecContext(ctx, `DELETE FROM security_qq_binding WHERE user_id=?`, userID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := r.RowsAffected()
+	return n > 0, nil
+}
+
+// QQOpenidByUserTx 返回用户绑定 openid（发送期解析真实目标）。
+func QQOpenidByUserTx(ctx context.Context, tx *sqlx.Tx, userID int64) (string, error) {
+	var s string
+	return s, tx.GetContext(ctx, &s, `SELECT openid FROM security_qq_binding WHERE user_id=?`, userID)
+}
+
+// AdminQQBindingsTx 返回活动管理员的 QQ 绑定（user_id,openid）。
+func AdminQQBindingsTx(ctx context.Context, tx *sqlx.Tx) ([]struct {
+	UserID int64  `db:"user_id"`
+	OpenID string `db:"openid"`
+}, error) {
+	var out []struct {
+		UserID int64  `db:"user_id"`
+		OpenID string `db:"openid"`
+	}
+	err := tx.SelectContext(ctx, &out,
+		`SELECT b.user_id,b.openid FROM security_qq_binding b
+		   JOIN user u ON u.id=b.user_id
+		  WHERE u.role='admin' AND u.status='active' AND b.openid<>''`)
+	return out, err
+}

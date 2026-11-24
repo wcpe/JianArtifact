@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -612,4 +613,163 @@ func (h *Handlers) RetryNotificationDelivery(c *gin.Context, deliveryID string) 
 		out.LastError = &row.LastError
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// GetSecurityCase 案件详情（头+命中+关联+既読水位）。
+func (h *Handlers) GetSecurityCase(c *gin.Context, caseID string) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	d, err := h.incident.SecurityCaseDetail(c.Request.Context(), p, caseID)
+	if err != nil {
+		auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+		return
+	}
+	out := SecurityCaseDetail{Case: caseRowToModel(&d.Case), Findings: []SecurityFinding{}, Links: []SecurityCaseLink{}}
+	for _, f := range d.Findings {
+		item := SecurityFinding{FindingId: f.FindingID, RuleId: f.RuleID, RuleVersion: f.RuleVersion,
+			Severity: SecurityFindingSeverity(f.Severity), SubjectKey: f.SubjectKey,
+			WindowFrom: &f.WindowFrom, WindowTo: &f.WindowTo, Summary: f.Summary, CreatedUnix: &f.CreatedUnix}
+		if f.Confidence != "" {
+			cf := SecurityFindingConfidence(f.Confidence)
+			item.Confidence = &cf
+		}
+		if f.CaseID != "" {
+			item.CaseId = &f.CaseID
+		}
+		out.Findings = append(out.Findings, item)
+	}
+	for _, l := range d.Links {
+		out.Links = append(out.Links, SecurityCaseLink{CaseId: l.CaseID, EventId: l.EventID,
+			LinkKind: SecurityCaseLinkLinkKind(l.LinkKind), LinkedBy: &l.LinkedBy, LinkedUnix: &l.LinkedUnix})
+	}
+	if d.Read != nil {
+		out.ReadSeenVersion = &d.Read.SeenVersion
+		out.ReadUnix = &d.Read.ReadUnix
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// GetSecurityCaseSection 案件四栏：timeline/uploads/identity/actions-evidence。
+func (h *Handlers) GetSecurityCaseSection(c *gin.Context, caseID string, section GetSecurityCaseSectionParamsSection, params GetSecurityCaseSectionParams) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	limit := 100
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	ctx := c.Request.Context()
+	decodeIP := func(fam int, b []byte) string {
+		if fam == 0 || len(b) == 0 {
+			return ""
+		}
+		if ip, ok := netip.AddrFromSlice(b); ok {
+			return ip.String()
+		}
+		return ""
+	}
+	switch section {
+	case Timeline:
+		rows, err := h.incident.SecurityCaseTimeline(ctx, p, caseID, limit)
+		if err != nil {
+			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			return
+		}
+		items := make([]gin.H, 0, len(rows))
+		for _, r := range rows {
+			items = append(items, gin.H{"sequence": r.Sequence, "eventId": r.EventID, "eventType": r.EventType,
+				"occurredAt": r.OccurredAt, "outcome": r.Outcome, "errorCode": r.ErrorCode,
+				"actorUserId": r.ActorUserID, "clientIp": decodeIP(r.ClientIPFamily, r.ClientIP), "linkKind": r.LinkKind})
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	case Uploads:
+		rows, err := h.incident.SecurityCaseUploads(ctx, p, caseID, limit)
+		if err != nil {
+			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			return
+		}
+		items := make([]gin.H, 0, len(rows))
+		for _, r := range rows {
+			items = append(items, gin.H{"eventId": r.EventID, "eventType": r.EventType,
+				"canonicalPath": r.CanonicalPath, "objectKind": r.ObjectKind, "objectId": r.ObjectID,
+				"digest": r.Digest, "sizeBytes": r.SizeBytes, "manifestDigest": r.ManifestDigest,
+				"targetVersion": r.TargetVersion, "repository": r.RepositoryNameSnapshot, "linkKind": r.LinkKind})
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	case Identity:
+		rows, err := h.incident.SecurityCaseIdentity(ctx, p, caseID, limit)
+		if err != nil {
+			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			return
+		}
+		items := make([]gin.H, 0, len(rows))
+		for _, r := range rows {
+			items = append(items, gin.H{"actorUserId": r.ActorUserID, "actorName": r.ActorNameSnapshot,
+				"credentialId": r.CredentialID, "sessionId": r.SessionID, "authMethod": r.AuthMethod,
+				"authStrength": r.AuthStrength, "clientIp": decodeIP(r.ClientIPFamily, r.ClientIP),
+				"userAgent": r.UserAgent, "events": r.Events})
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	case ActionsEvidence:
+		out, err := h.incident.SecurityCaseActionsEvidence(ctx, p, caseID, limit)
+		if err != nil {
+			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			return
+		}
+		findings := make([]gin.H, 0, len(out.Findings))
+		for _, f := range out.Findings {
+			findings = append(findings, gin.H{"findingId": f.FindingID, "ruleId": f.RuleID,
+				"ruleVersion": f.RuleVersion, "severity": f.Severity, "subjectKey": f.SubjectKey,
+				"summary": f.Summary, "createdUnix": f.CreatedUnix})
+		}
+		holds := make([]gin.H, 0, len(out.Holds))
+		for _, hd := range out.Holds {
+			holds = append(holds, gin.H{"holdId": hd.HoldID, "digest": hd.Digest, "byteState": hd.ByteState,
+				"state": hd.State, "createdAt": hd.CreatedAt})
+		}
+		c.JSON(http.StatusOK, gin.H{"findings": findings, "holds": holds})
+	default:
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "未知分栏")
+	}
+}
+
+// SetSecurityQQBinding 绑定管理员账号与 QQ openid。
+func (h *Handlers) SetSecurityQQBinding(c *gin.Context, userID int64) {
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	var body struct {
+		Openid string `json:"openid"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "openid 必須")
+		return
+	}
+	if err := h.incident.SetQQBinding(c.Request.Context(), p, userID, body.Openid); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// DeleteSecurityQQBinding 解绑 QQ openid。
+func (h *Handlers) DeleteSecurityQQBinding(c *gin.Context, userID int64) {
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	if err := h.incident.RemoveQQBinding(c.Request.Context(), p, userID); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

@@ -438,7 +438,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	})
 	// FR-172 安全通知投递：待機行を 30 秒周期で派发。SMTP 未設定でも failed で可視化するため常時登録。
 	schedulerSvc.Register("security-notification-delivery", 30*time.Second, func(ctx context.Context) error {
-		n, err := incidentSvc.DispatchPendingNotifications(ctx, smtpNotificationMailer(cfg.SMTP))
+		n, err := incidentSvc.DispatchPendingNotifications(ctx, smtpNotificationMailer(cfg.SMTP), qqNotificationSender(cfg.QQ))
 		if err != nil {
 			return err
 		}

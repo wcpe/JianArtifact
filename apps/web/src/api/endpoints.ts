@@ -1947,3 +1947,73 @@ export interface SecurityFinding {
 export function getSecurityFindings(limit = 50): Promise<SecurityFinding[]> {
   return request<SecurityFinding[]>(`/security/findings?limit=${limit}`);
 }
+
+// ---- FR-171 案件四栏详情 ----
+
+export interface SecurityCaseDetail {
+  case: SecurityCase;
+  findings: SecurityFinding[];
+  links: SecurityCaseLink[];
+  readSeenVersion?: number;
+  readUnix?: number;
+}
+
+export interface SecurityCaseTimelineItem {
+  sequence: number;
+  eventId: string;
+  eventType: string;
+  occurredAt: number;
+  outcome: string;
+  errorCode: string;
+  actorUserId: number | null;
+  clientIp: string;
+  linkKind: string;
+}
+
+export interface SecurityCaseUploadItem {
+  eventId: string;
+  eventType: string;
+  canonicalPath: string;
+  objectKind: string;
+  objectId: string;
+  digest: string;
+  sizeBytes: number | null;
+  manifestDigest: string;
+  targetVersion: string;
+  repository: string;
+  linkKind: string;
+}
+
+export interface SecurityCaseIdentityItem {
+  actorUserId: number | null;
+  actorName: string;
+  credentialId: string;
+  sessionId: string;
+  authMethod: string;
+  authStrength: string;
+  clientIp: string;
+  userAgent: string;
+  events: number;
+}
+
+export interface SecurityCaseHoldItem {
+  holdId: string;
+  digest: string;
+  byteState: string;
+  state: string;
+  createdAt: number;
+}
+
+export async function getSecurityCase(caseId: string): Promise<SecurityCaseDetail> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}`);
+}
+
+export type SecurityCaseSectionKind = 'timeline' | 'uploads' | 'identity' | 'actions-evidence';
+
+export async function getSecurityCaseSection(caseId: string, section: SecurityCaseSectionKind, limit = 100): Promise<Record<string, unknown[]>> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}/${section}?limit=${limit}`);
+}
+
+export async function markSecurityCaseRead(caseId: string, body: { seenVersion: number }): Promise<void> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}/read`, { method: "PUT", body: JSON.stringify(body) });
+}

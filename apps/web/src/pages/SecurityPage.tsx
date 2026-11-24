@@ -1,6 +1,7 @@
 // FR-171 风险调查页：安全事件队列（多维度关联筛选）+ 案件列表与认领/结案。
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Box, Button, Table, Text, TextInput } from "@mantine/core";
+import { Link } from "react-router-dom";
+import { Alert, Anchor, Box, Button, Table, Text, TextInput } from "@mantine/core";
 import { IconAlertTriangle, IconRefresh, IconSearch } from "@tabler/icons-react";
 import {
   getSecurityCases,
@@ -98,7 +99,7 @@ export function SecurityPage() {
             <Table.Tr><Table.Td colSpan={5}><Text size="sm" c="dimmed">无案件</Text></Table.Td></Table.Tr>
           ) : cases.map((c) => (
             <Table.Tr key={c.caseId}>
-              <Table.Td><Text size="sm">{c.title}</Text></Table.Td>
+              <Table.Td><Anchor component={Link} to={`/security/cases/${c.caseId}`}><Text size="sm">{c.title}</Text></Anchor></Table.Td>
               <Table.Td>{c.severity}</Table.Td>
               <Table.Td>{c.state}</Table.Td>
               <Table.Td>{c.targetVersion}</Table.Td>

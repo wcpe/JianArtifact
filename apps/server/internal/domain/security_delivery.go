@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +40,8 @@ func maskEmail(email string) string {
 
 // emitDeliveriesForNotificationTx は通知 seq に紐づく站外投递行を同じ写トランザクションで登録する。
 // SMTP：現時点の有効管理者の登録メール宛に 1 人 1 行（宛先は脱敏のみ保存）。
-// QQ：BotGo 等の平台前提が未整備のため行を作らない（阻塞項として终验に記載）。
+// QQ：qq 绑定済みの管理者宛に 1 人 1 行（宛先は qq:u<uid> の不透明識別子のみ保存、
+// 実 openid は送信時に绑定表から復元する）。
 func emitDeliveriesForNotificationTx(ctx context.Context, tx *sqlx.Tx, seq int64, now time.Time) error {
 	emails, err := repository.AdminEmailsTx(ctx, tx)
 	if err != nil {
@@ -56,16 +58,48 @@ func emitDeliveriesForNotificationTx(ctx context.Context, tx *sqlx.Tx, seq int64
 			return err
 		}
 	}
+	bindings, err := repository.AdminQQBindingsTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, b := range bindings {
+		d := repository.SecurityNotificationDeliveryRow{
+			DeliveryID: "dlv-" + uuid.NewString(), Seq: seq, Channel: "qq",
+			TargetMasked: qqMaskedTarget(b.UserID), State: "pending", Attempts: 0,
+			NextRetryUnix: unix, CreatedUnix: unix, UpdatedUnix: unix,
+		}
+		if err := repository.InsertDeliveryTx(ctx, tx, d); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// qqMaskedTarget は QQ 投递行の脱敏宛先表現（user_id 識別子のみ、openid を含まない）。
+func qqMaskedTarget(userID int64) string {
+	return "qq:u" + strconv.FormatInt(userID, 10)
+}
+
+// qqTargetUserID は脱敏宛先から user_id を復元する。形式不正は false。
+func qqTargetUserID(masked string) (int64, bool) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(masked, "qq:u"), 10, 64)
+	if err != nil || id <= 0 || !strings.HasPrefix(masked, "qq:u") {
+		return 0, false
+	}
+	return id, true
 }
 
 // NotificationMailer は 1 通の送信を行う差し込み関数（SMTP 実装は装配層）。
 // ctx に試行タイムアウトが載る。
 type NotificationMailer func(ctx context.Context, to, subject, text string) error
 
+// NotificationQQSender は QQ チャンネル 1 件の送信を行う差し込み関数
+// （公式 API アダプタは装配層；未整備なら nil で恒久的失敗可視化）。
+type NotificationQQSender func(ctx context.Context, openid, title, text string) error
+
 // DispatchPendingNotifications は到期待投递行を认领→送信→结算する。处理件数を返す。
-// mailer が nil（SMTP 未設定）でも待機行を failed で可視化するため呼び出される。
-func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Context, mailer NotificationMailer) (int, error) {
+// mailer/qq が nil（渠道未設定）でも待機行を failed で可視化するため呼び出される。
+func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Context, mailer NotificationMailer, qq NotificationQQSender) (int, error) {
 	now := s.now().Unix()
 	var claimed []repository.SecurityNotificationDeliveryRow
 	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
@@ -91,6 +125,18 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 	for _, e := range emails {
 		realTarget[maskEmail(e)] = e
 	}
+	// QQ：宛先復元は送信ごとに绑定表から行う（解绑された宛先は target_gone）。
+	qqOpenid := func(uid int64) string {
+		var openid string
+		if err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+			var e error
+			openid, e = repository.QQOpenidByUserTx(ctx, tx, uid)
+			return e
+		}); err != nil {
+			return ""
+		}
+		return openid
+	}
 	done := 0
 	for _, d := range claimed {
 		attempts := d.Attempts + 1
@@ -99,7 +145,23 @@ func (s *SecurityIncidentService) DispatchPendingNotifications(ctx context.Conte
 		target := realTarget[d.TargetMasked]
 		switch {
 		case d.Channel == "qq":
-			sendErr, permanent = errStr("qq_channel_not_configured"), true
+			uid, ok := qqTargetUserID(d.TargetMasked)
+			switch {
+			case qq == nil:
+				sendErr, permanent = errStr("qq_channel_not_configured"), true
+			case !ok:
+				sendErr, permanent = errStr("target_gone"), true
+			default:
+				openid := qqOpenid(uid)
+				if openid == "" {
+					sendErr, permanent = errStr("target_gone"), true
+				} else {
+					actx, cancel := context.WithTimeout(ctx, deliveryAttemptTimeout)
+					title := "[JianArtifact 安全通知] " + notificationTitleOf(ctx, s, d.Seq)
+					sendErr = qq(actx, openid, title, title+"\n\n安全コンソール（/security）で確認してください。")
+					cancel()
+				}
+			}
 		case mailer == nil:
 			sendErr, permanent = errStr("smtp_not_configured"), true
 		case target == "":

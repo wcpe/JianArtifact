@@ -86,6 +86,8 @@ const (
 	EnvSMTPFrom     = "JIAN_SMTP_FROM"     // 发件地址；空回落 JIAN_SMTP_USER
 	EnvSMTPUser     = "JIAN_SMTP_USER"     // 登录用户；空 = 不鉴权
 	EnvSMTPPassword = "JIAN_SMTP_PASSWORD" // 登录口令（仅环境变量，不落库不打印）
+	EnvQQEndpoint   = "JIAN_QQ_ENDPOINT"   // QQ 通知适配端点（POST JSON {openid,title,text}）；空 = 不启用 QQ 渠道
+	EnvQQToken      = "JIAN_QQ_TOKEN"      // QQ 端点 Bearer 令牌；可选
 	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
 	// 搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
@@ -300,6 +302,7 @@ type Config struct {
 	OIDC           OIDCConfig // OIDC 身份源接入配置（Issuer 空 = 不启用）
 	LDAP           LDAPConfig // LDAP 身份源接入配置（URL 空 = 不启用）
 	SMTP           SMTPConfig // 通知邮件通道（FR-172；HOST 空 = 不启用）
+	QQ             QQConfig   // 通知 QQ 通道（FR-172；ENDPOINT 空 = 不启用）
 }
 
 // SMTPConfig 是安全通知邮件通道配置（FR-172）；
@@ -314,6 +317,16 @@ type SMTPConfig struct {
 
 // Enabled 报告 SMTP 投递是否启用。
 func (c SMTPConfig) Enabled() bool { return c.Host != "" }
+
+// QQConfig 是安全通知 QQ 通道配置（FR-172）；公式 API 整備までは
+// 适配端点（薄 HTTP 适配器）へ POST する形を取る。未設定は渠道无効・投递は failed 可視化。
+type QQConfig struct {
+	Endpoint string
+	Token    string
+}
+
+// Enabled は QQ 渠道が有効か（端点設定済み）。
+func (c QQConfig) Enabled() bool { return c.Endpoint != "" }
 
 // LDAPConfig 是 LDAP 目录接入配置（见 ADR-0029）；
 // 服务账号口令只从环境变量解析，不落库、不打印、不进审计。
@@ -461,9 +474,15 @@ func Load() (*Config, error) {
 		OIDC:                        oidc,
 		LDAP:                        ldap,
 		SMTP:                        smtpConfig(),
+		QQ:                          qqConfig(),
 		RestartUnit:                 envOr(EnvRestartUnit, defaultRestartUnit),
 		RestartScope:                restartScope(),
 	}, nil
+}
+
+// qqConfig 解析 FR-172 QQ 通知通道。
+func qqConfig() QQConfig {
+	return QQConfig{Endpoint: strings.TrimSpace(os.Getenv(EnvQQEndpoint)), Token: os.Getenv(EnvQQToken)}
 }
 
 // smtpConfig 解析 FR-172 SMTP 通知通道；端口非法/非正回落 25。

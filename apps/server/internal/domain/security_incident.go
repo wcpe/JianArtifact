@@ -15,7 +15,8 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
-)
+
+	"regexp")
 
 // FR-168：事故处置动作生命周期——预览→确认→执行，幂等、逐项结果、近期强认证由处理层裁决。
 
@@ -826,4 +827,135 @@ func (s *SecurityIncidentService) RetryNotificationDelivery(ctx context.Context,
 		return nil
 	})
 	return out, err
+}
+
+// SecurityCaseDetail 案件头 + 命中 + 关联 + 本人既読水位。
+type SecurityCaseDetail struct {
+	Case     repository.SecurityCaseRow
+	Findings []repository.SecurityFindingRow
+	Links    []repository.SecurityCaseLinkRow
+	Read     *repository.SecurityCaseReadRow
+}
+
+// SecurityCaseDetail 详情：案件存在性 + 附属投影。管理员限定。
+func (s *SecurityIncidentService) SecurityCaseDetail(ctx context.Context, p *auth.Principal, caseID string) (*SecurityCaseDetail, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	out := &SecurityCaseDetail{}
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		c, err := repository.GetSecurityCaseTx(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+		out.Case = *c
+		if out.Findings, err = repository.CaseFindingsTx(ctx, tx, caseID); err != nil {
+			return err
+		}
+		if out.Links, err = repository.ListSecurityCaseLinksTx(ctx, tx, caseID); err != nil {
+			return err
+		}
+		if r, err := repository.CaseReadTx(ctx, tx, caseID, p.UserID); err == nil {
+			out.Read = &r
+		}
+		return nil
+	})
+	return out, err
+}
+
+// SecurityCaseSection 四栏：timeline / uploads / identity / actions-evidence。
+// actions-evidence = 案件附着命中 + 覆盖案件对象摘要的保全。
+type SecurityCaseActionsEvidence struct {
+	Findings []repository.SecurityFindingRow
+	Holds    []repository.EvidenceHold
+}
+
+func (s *SecurityIncidentService) SecurityCaseTimeline(ctx context.Context, p *auth.Principal, caseID string, limit int) ([]repository.SecurityCaseTimelineRow, error) {
+	var out []repository.SecurityCaseTimelineRow
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.CaseTimelineTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+func (s *SecurityIncidentService) SecurityCaseUploads(ctx context.Context, p *auth.Principal, caseID string, limit int) ([]repository.SecurityCaseUploadRow, error) {
+	var out []repository.SecurityCaseUploadRow
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.CaseUploadsTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+func (s *SecurityIncidentService) SecurityCaseIdentity(ctx context.Context, p *auth.Principal, caseID string, limit int) ([]repository.SecurityCaseIdentityRow, error) {
+	var out []repository.SecurityCaseIdentityRow
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.CaseIdentityTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+func (s *SecurityIncidentService) SecurityCaseActionsEvidence(ctx context.Context, p *auth.Principal, caseID string, limit int) (*SecurityCaseActionsEvidence, error) {
+	out := &SecurityCaseActionsEvidence{}
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		if out.Findings, e = repository.CaseFindingsTx(ctx, tx, caseID); e != nil {
+			return e
+		}
+		out.Holds, e = repository.CaseEvidenceHoldsTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+// caseSection 共通：管理员裁决 + 案件存在检查 + limit 夹取。
+func (s *SecurityIncidentService) caseSection(ctx context.Context, p *auth.Principal, caseID string, fn func(*sqlx.Tx) error) error {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return ErrAdmissionForbidden
+	}
+	return s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		if _, err := repository.GetSecurityCaseTx(ctx, tx, caseID); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
+// ---- FR-172 QQ 渠道绑定 ----
+
+var qqOpenidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
+
+// SetQQBinding 绑定管理员账号与 QQ openid。仅管理员；openid 形态校验。
+func (s *SecurityIncidentService) SetQQBinding(ctx context.Context, p *auth.Principal, targetUserID int64, openid string) error {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return ErrAdmissionForbidden
+	}
+	if targetUserID <= 0 || !qqOpenidPattern.MatchString(openid) {
+		return ErrValidation
+	}
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		return repository.SetQQBindingTx(ctx, tx, targetUserID, openid, s.now().Unix())
+	})
+}
+
+// RemoveQQBinding 解绑。仅管理员。
+func (s *SecurityIncidentService) RemoveQQBinding(ctx context.Context, p *auth.Principal, targetUserID int64) error {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return ErrAdmissionForbidden
+	}
+	var removed bool
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		removed, e = repository.DeleteQQBindingTx(ctx, tx, targetUserID)
+		return e
+	})
+	if err == nil && !removed {
+		return sql.ErrNoRows
+	}
+	return err
 }
