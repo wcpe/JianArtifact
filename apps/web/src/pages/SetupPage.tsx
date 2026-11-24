@@ -55,7 +55,9 @@ export function SetupPage() {
   const [active, setActive] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [needClaim, setNeedClaim] = useState(false);
-  const [enroll, setEnroll] = useState<{ challengeToken: string; enrollmentUri: string } | null>(null);
+  const [enroll, setEnroll] = useState<{ challengeToken: string; enrollmentUri: string } | null>(
+    null,
+  );
   const [otp, setOtp] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -189,65 +191,65 @@ export function SetupPage() {
             {/* 第二步：创建管理员。 */}
             <Stepper.Step label={t("setup.stepAdmin")}>
               {!enroll && !codes ? (
-              <form onSubmit={handleSubmit}>
-                <Stack gap="sm" mt="md">
-                  <Text c="dimmed" size="sm">
-                    {t("setup.adminDesc")}
-                  </Text>
-                  {error ? (
-                    <Alert color="red" variant="light">
-                      {error}
-                    </Alert>
-                  ) : null}
-                  <TextInput
-                    label={t("auth.username")}
-                    withAsterisk
-                    {...form.getInputProps("username")}
-                  />
-                  <PasswordInput
-                    label={t("auth.password")}
-                    withAsterisk
-                    {...form.getInputProps("password")}
-                  />
-                  {form.values.password ? (
-                    <Box>
-                      <Group justify="space-between" mb={4}>
-                        <Text size="xs" c="dimmed">
-                          {t("setup.strength")}
-                        </Text>
-                        <Text size="xs" c={strengthColor}>
-                          {strengthLabel}
-                        </Text>
-                      </Group>
-                      <Progress value={strength} color={strengthColor} size="sm" />
-                    </Box>
-                  ) : null}
-                  <PasswordInput
-                    label={t("setup.confirmPassword")}
-                    withAsterisk
-                    {...form.getInputProps("confirmPassword")}
-                  />
-                  {needClaim ? (
+                <form onSubmit={handleSubmit}>
+                  <Stack gap="sm" mt="md">
+                    <Text c="dimmed" size="sm">
+                      {t("setup.adminDesc")}
+                    </Text>
+                    {error ? (
+                      <Alert color="red" variant="light">
+                        {error}
+                      </Alert>
+                    ) : null}
                     <TextInput
-                      label={t("auth.claimTicket")}
+                      label={t("auth.username")}
                       withAsterisk
-                      {...form.getInputProps("claimTicket")}
+                      {...form.getInputProps("username")}
                     />
-                  ) : null}
-                  <Group justify="space-between" mt="sm">
-                    <Button variant="default" onClick={() => setActive(0)}>
-                      {t("setup.back")}
-                    </Button>
-                    <Button
-                      type="submit"
-                      loading={submitting}
-                      leftSection={<IconCheck size={16} />}
-                    >
-                      {t("setup.submit")}
-                    </Button>
-                  </Group>
-                </Stack>
-              </form>
+                    <PasswordInput
+                      label={t("auth.password")}
+                      withAsterisk
+                      {...form.getInputProps("password")}
+                    />
+                    {form.values.password ? (
+                      <Box>
+                        <Group justify="space-between" mb={4}>
+                          <Text size="xs" c="dimmed">
+                            {t("setup.strength")}
+                          </Text>
+                          <Text size="xs" c={strengthColor}>
+                            {strengthLabel}
+                          </Text>
+                        </Group>
+                        <Progress value={strength} color={strengthColor} size="sm" />
+                      </Box>
+                    ) : null}
+                    <PasswordInput
+                      label={t("setup.confirmPassword")}
+                      withAsterisk
+                      {...form.getInputProps("confirmPassword")}
+                    />
+                    {needClaim ? (
+                      <TextInput
+                        label={t("auth.claimTicket")}
+                        withAsterisk
+                        {...form.getInputProps("claimTicket")}
+                      />
+                    ) : null}
+                    <Group justify="space-between" mt="sm">
+                      <Button variant="default" onClick={() => setActive(0)}>
+                        {t("setup.back")}
+                      </Button>
+                      <Button
+                        type="submit"
+                        loading={submitting}
+                        leftSection={<IconCheck size={16} />}
+                      >
+                        {t("setup.submit")}
+                      </Button>
+                    </Group>
+                  </Stack>
+                </form>
               ) : null}
               {enroll ? (
                 <Stack gap="sm" mt="md">
@@ -272,7 +274,11 @@ export function SetupPage() {
                     onClick={() => {
                       setSubmitting(true);
                       setError(null);
-                      confirmMfaEnroll(enroll.challengeToken, otp.trim(), form.values.claimTicket || undefined)
+                      confirmMfaEnroll(
+                        enroll.challengeToken,
+                        otp.trim(),
+                        form.values.claimTicket || undefined,
+                      )
                         .then((res) => {
                           setCodes(res.recoveryCodes);
                           setEnroll(null);

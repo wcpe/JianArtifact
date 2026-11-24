@@ -10,7 +10,10 @@ function unauthorized(request: Request) {
   const header = request.headers.get("Authorization") ?? "";
   const token = /^bearer /i.test(header) ? header.slice(7).trim() : "";
   if (token !== MOCK_TOKEN && token !== MOCK_SECOND_ADMIN_TOKEN) {
-    return HttpResponse.json({ error: { code: "forbidden", message: "forbidden" } }, { status: 403 });
+    return HttpResponse.json(
+      { error: { code: "forbidden", message: "forbidden" } },
+      { status: 403 },
+    );
   }
   return null;
 }
@@ -52,28 +55,50 @@ const recoveryCodes = () => ({
 // —— 强认证挑战流（auth 根，无鉴权要求：挑战明文即凭据）——
 const mfaHandlers = [
   http.post(`${authRoot}/verify`, async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { challengeToken?: string; otp?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      challengeToken?: string;
+      otp?: string;
+    };
     if (!body.challengeToken || !body.otp) {
-      return HttpResponse.json({ error: { code: "bad_request", message: "挑战与口令必填" } }, { status: 400 });
+      return HttpResponse.json(
+        { error: { code: "bad_request", message: "挑战与口令必填" } },
+        { status: 400 },
+      );
     }
     return HttpResponse.json({ next: "authenticated", token: MOCK_TOKEN, user: MOCK_USER });
   }),
 
   http.post(`${authRoot}/recover`, async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { challengeToken?: string; recoveryCode?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      challengeToken?: string;
+      recoveryCode?: string;
+    };
     if (!body.challengeToken || !body.recoveryCode) {
-      return HttpResponse.json({ error: { code: "bad_request", message: "挑战与恢复码必填" } }, { status: 400 });
+      return HttpResponse.json(
+        { error: { code: "bad_request", message: "挑战与恢复码必填" } },
+        { status: 400 },
+      );
     }
     return HttpResponse.json(mfaEnrollChallenge());
   }),
 
   http.post(`${authRoot}/claim`, async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { username?: string; password?: string; claimTicket?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      username?: string;
+      password?: string;
+      claimTicket?: string;
+    };
     if (!body.username || !body.password || !body.claimTicket) {
-      return HttpResponse.json({ error: { code: "bad_request", message: "用户名、口令与认领票必填" } }, { status: 400 });
+      return HttpResponse.json(
+        { error: { code: "bad_request", message: "用户名、口令与认领票必填" } },
+        { status: 400 },
+      );
     }
     if (body.claimTicket === "invalid") {
-      return HttpResponse.json({ error: { code: "claim_rejected", message: "认领票无效或已用尽" } }, { status: 401 });
+      return HttpResponse.json(
+        { error: { code: "claim_rejected", message: "认领票无效或已用尽" } },
+        { status: 401 },
+      );
     }
     return HttpResponse.json(mfaEnrollChallenge());
   }),
@@ -85,9 +110,15 @@ const mfaHandlers = [
   }),
 
   http.post(`${authRoot}/enroll/confirm`, async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { challengeToken?: string; otp?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      challengeToken?: string;
+      otp?: string;
+    };
     if (!body.challengeToken || !body.otp) {
-      return HttpResponse.json({ error: { code: "bad_request", message: "挑战与口令必填" } }, { status: 400 });
+      return HttpResponse.json(
+        { error: { code: "bad_request", message: "挑战与口令必填" } },
+        { status: 400 },
+      );
     }
     return HttpResponse.json(recoveryCodes());
   }),
@@ -177,7 +208,11 @@ const opsHandlers = [
     const errResp = unauthorized(request);
     if (errResp) return errResp;
     const n = notifications.find((x) => x.noticeId === params.noticeId);
-    if (!n) return HttpResponse.json({ error: { code: "not_found", message: "通知不存在" } }, { status: 404 });
+    if (!n)
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "通知不存在" } },
+        { status: 404 },
+      );
     n.acked = true;
     return new HttpResponse(null, { status: 204 });
   }),
@@ -192,9 +227,16 @@ const opsHandlers = [
     const errResp = unauthorized(request);
     if (errResp) return errResp;
     const d = deliveries.find((x) => x.deliveryId === params.deliveryId);
-    if (!d) return HttpResponse.json({ error: { code: "not_found", message: "投递不存在" } }, { status: 404 });
+    if (!d)
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "投递不存在" } },
+        { status: 404 },
+      );
     if (d.state !== "failed") {
-      return HttpResponse.json({ error: { code: "conflict", message: "仅失败投递可重试" } }, { status: 409 });
+      return HttpResponse.json(
+        { error: { code: "conflict", message: "仅失败投递可重试" } },
+        { status: 409 },
+      );
     }
     return HttpResponse.json({ ...d, state: "pending" });
   }),
@@ -217,7 +259,10 @@ const opsHandlers = [
     if (errResp) return errResp;
     const body = (await request.json().catch(() => ({}))) as { actionDigest?: string };
     if (body.actionDigest !== "sha256:mockdigest01") {
-      return HttpResponse.json({ error: { code: "conflict", message: "动作摘要漂移" } }, { status: 409 });
+      return HttpResponse.json(
+        { error: { code: "conflict", message: "动作摘要漂移" } },
+        { status: 409 },
+      );
     }
     return HttpResponse.json({
       actionId: params.actionId,
@@ -258,7 +303,13 @@ const opsHandlers = [
     if (errResp) return errResp;
     return HttpResponse.json({
       items: [
-        { holdId: "hold-01", digest: "sha256:ab12", byteState: "metadata_only", state: "active", createdUnix: 1_762_000_000 },
+        {
+          holdId: "hold-01",
+          digest: "sha256:ab12",
+          byteState: "metadata_only",
+          state: "active",
+          createdUnix: 1_762_000_000,
+        },
       ],
     });
   }),

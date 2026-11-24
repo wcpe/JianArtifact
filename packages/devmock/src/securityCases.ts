@@ -8,7 +8,10 @@ function unauthorized(request: Request) {
   const header = request.headers.get("Authorization") ?? "";
   const token = /^bearer /i.test(header) ? header.slice(7).trim() : "";
   if (token !== MOCK_TOKEN && token !== MOCK_SECOND_ADMIN_TOKEN) {
-    return HttpResponse.json({ error: { code: "forbidden", message: "forbidden" } }, { status: 403 });
+    return HttpResponse.json(
+      { error: { code: "forbidden", message: "forbidden" } },
+      { status: 403 },
+    );
   }
   return null;
 }
@@ -79,23 +82,89 @@ const findings = [
 ];
 
 const caseLinks = [
-  { caseId: "case-01", eventId: "audit-security-login-1", linkKind: "fact", linkedBy: "rule-engine", linkedUnix: 1_762_000_000 },
-  { caseId: "case-01", eventId: "audit-security-login-2", linkKind: "candidate", linkedBy: "admin-1", linkedUnix: 1_762_000_050 },
-  { caseId: "case-02", eventId: "audit-security-login-1", linkKind: "fact", linkedBy: "rule-engine", linkedUnix: 1_761_900_000 },
+  {
+    caseId: "case-01",
+    eventId: "audit-security-login-1",
+    linkKind: "fact",
+    linkedBy: "rule-engine",
+    linkedUnix: 1_762_000_000,
+  },
+  {
+    caseId: "case-01",
+    eventId: "audit-security-login-2",
+    linkKind: "candidate",
+    linkedBy: "admin-1",
+    linkedUnix: 1_762_000_050,
+  },
+  {
+    caseId: "case-02",
+    eventId: "audit-security-login-1",
+    linkKind: "fact",
+    linkedBy: "rule-engine",
+    linkedUnix: 1_761_900_000,
+  },
 ];
 
 const timelineItems = [
-  { sequence: 11, eventId: "audit-security-login-1", eventType: "protocol.write_denied", occurredAt: 1_761_999_600, outcome: "denied", errorCode: "forbidden", actorUserId: 2, clientIp: "203.0.113.7", linkKind: "fact" },
-  { sequence: 12, eventId: "audit-security-login-2", eventType: "asset.change_committed", occurredAt: 1_761_999_800, outcome: "succeeded", errorCode: "", actorUserId: 2, clientIp: "203.0.113.9", linkKind: "candidate" },
+  {
+    sequence: 11,
+    eventId: "audit-security-login-1",
+    eventType: "protocol.write_denied",
+    occurredAt: 1_761_999_600,
+    outcome: "denied",
+    errorCode: "forbidden",
+    actorUserId: 2,
+    clientIp: "203.0.113.7",
+    linkKind: "fact",
+  },
+  {
+    sequence: 12,
+    eventId: "audit-security-login-2",
+    eventType: "asset.change_committed",
+    occurredAt: 1_761_999_800,
+    outcome: "succeeded",
+    errorCode: "",
+    actorUserId: 2,
+    clientIp: "203.0.113.9",
+    linkKind: "candidate",
+  },
 ];
 const uploadItems = [
-  { eventId: "audit-security-login-2", eventType: "asset.change_committed", canonicalPath: "libs/com/example/demo-1.0.jar", objectKind: "asset", objectId: "", digest: "sha256:ab12", sizeBytes: 2048, manifestDigest: "", targetVersion: "1.0", repository: "raw-demo", linkKind: "fact" },
+  {
+    eventId: "audit-security-login-2",
+    eventType: "asset.change_committed",
+    canonicalPath: "libs/com/example/demo-1.0.jar",
+    objectKind: "asset",
+    objectId: "",
+    digest: "sha256:ab12",
+    sizeBytes: 2048,
+    manifestDigest: "",
+    targetVersion: "1.0",
+    repository: "raw-demo",
+    linkKind: "fact",
+  },
 ];
 const identityItems = [
-  { actorUserId: 2, actorName: "dev-user", credentialId: "550e8400-e29b-41d4-a716-446655440000", sessionId: "550e8400-e29b-41d4-a716-446655440001", authMethod: "bearer_token", authStrength: "machine", clientIp: "203.0.113.7", userAgent: "curl/8.0", events: 12 },
+  {
+    actorUserId: 2,
+    actorName: "dev-user",
+    credentialId: "550e8400-e29b-41d4-a716-446655440000",
+    sessionId: "550e8400-e29b-41d4-a716-446655440001",
+    authMethod: "bearer_token",
+    authStrength: "machine",
+    clientIp: "203.0.113.7",
+    userAgent: "curl/8.0",
+    events: 12,
+  },
 ];
 const holdItems = [
-  { holdId: "hold-01", digest: "sha256:ab12", byteState: "metadata_only", state: "active", createdAt: 1_762_000_050 },
+  {
+    holdId: "hold-01",
+    digest: "sha256:ab12",
+    byteState: "metadata_only",
+    state: "active",
+    createdAt: 1_762_000_050,
+  },
 ];
 
 const bindings = new Map<number, string>();
@@ -117,14 +186,22 @@ export const securityCaseHandlers = [
     const denied = unauthorized(request);
     if (denied) return denied;
     const c = cases.find((x) => x.caseId === params.caseId);
-    if (!c) return HttpResponse.json({ error: { code: "security_case_not_found", message: "not found" } }, { status: 404 });
+    if (!c)
+      return HttpResponse.json(
+        { error: { code: "security_case_not_found", message: "not found" } },
+        { status: 404 },
+      );
     return HttpResponse.json(caseLinks.filter((l) => l.caseId === c.caseId));
   }),
   http.get(`${root}/cases/:caseId`, ({ request, params }) => {
     const denied = unauthorized(request);
     if (denied) return denied;
     const c = cases.find((x) => x.caseId === params.caseId);
-    if (!c) return HttpResponse.json({ error: { code: "security_case_not_found", message: "not found" } }, { status: 404 });
+    if (!c)
+      return HttpResponse.json(
+        { error: { code: "security_case_not_found", message: "not found" } },
+        { status: 404 },
+      );
     return HttpResponse.json({
       case: c,
       findings: findings.filter((f) => f.caseId === c.caseId),
@@ -137,10 +214,17 @@ export const securityCaseHandlers = [
     const denied = unauthorized(request);
     if (denied) return denied;
     const c = cases.find((x) => x.caseId === params.caseId);
-    if (!c) return HttpResponse.json({ error: { code: "security_case_not_found", message: "not found" } }, { status: 404 });
+    if (!c)
+      return HttpResponse.json(
+        { error: { code: "security_case_not_found", message: "not found" } },
+        { status: 404 },
+      );
     const body = (await request.json()) as { action: string; expectVersion?: number };
     if (body.expectVersion !== undefined && body.expectVersion !== c.targetVersion) {
-      return HttpResponse.json({ error: { code: "security_confirmation_stale", message: "stale" } }, { status: 409 });
+      return HttpResponse.json(
+        { error: { code: "security_confirmation_stale", message: "stale" } },
+        { status: 409 },
+      );
     }
     if (body.action === "claim" && c.state === "open") {
       c.state = "claimed";
@@ -151,7 +235,10 @@ export const securityCaseHandlers = [
       c.resolution = body.action ? "done" : "done";
       c.targetVersion += 1;
     } else {
-      return HttpResponse.json({ error: { code: "security_transition_invalid", message: "invalid" } }, { status: 409 });
+      return HttpResponse.json(
+        { error: { code: "security_transition_invalid", message: "invalid" } },
+        { status: 409 },
+      );
     }
     c.updatedUnix = 1_762_000_200;
     return HttpResponse.json(c);
@@ -160,7 +247,11 @@ export const securityCaseHandlers = [
     const denied = unauthorized(request);
     if (denied) return denied;
     const c = cases.find((x) => x.caseId === params.caseId);
-    if (!c) return HttpResponse.json({ error: { code: "security_case_not_found", message: "not found" } }, { status: 404 });
+    if (!c)
+      return HttpResponse.json(
+        { error: { code: "security_case_not_found", message: "not found" } },
+        { status: 404 },
+      );
     return HttpResponse.json({ seenVersion: c.targetVersion });
   }),
   http.get(`${root}/cases/:caseId/timeline`, ({ request }) => {
@@ -181,14 +272,20 @@ export const securityCaseHandlers = [
   http.get(`${root}/cases/:caseId/actions-evidence`, ({ request }) => {
     const denied = unauthorized(request);
     if (denied) return denied;
-    return HttpResponse.json({ findings: findings.filter((f) => f.caseId === "case-01"), holds: holdItems });
+    return HttpResponse.json({
+      findings: findings.filter((f) => f.caseId === "case-01"),
+      holds: holdItems,
+    });
   }),
   http.put(`${root}/qq-bindings/:userId`, async ({ request, params }) => {
     const denied = unauthorized(request);
     if (denied) return denied;
     const body = (await request.json()) as { openid?: string };
     if (!body.openid || body.openid.length < 3) {
-      return HttpResponse.json({ error: { code: "bad_request", message: "openid" } }, { status: 400 });
+      return HttpResponse.json(
+        { error: { code: "bad_request", message: "openid" } },
+        { status: 400 },
+      );
     }
     bindings.set(Number(params.userId), body.openid);
     return new HttpResponse(null, { status: 204 });
@@ -197,7 +294,10 @@ export const securityCaseHandlers = [
     const denied = unauthorized(request);
     if (denied) return denied;
     if (!bindings.delete(Number(params.userId))) {
-      return HttpResponse.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "not found" } },
+        { status: 404 },
+      );
     }
     return new HttpResponse(null, { status: 204 });
   }),

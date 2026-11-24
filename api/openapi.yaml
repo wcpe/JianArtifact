@@ -1178,10 +1178,10 @@ paths:
       parameters:
         - name: after
           in: query
-          schema: {type: integer, format: int64}
+          schema: { type: integer, format: int64 }
         - name: limit
           in: query
-          schema: {type: integer, minimum: 1, maximum: 100}
+          schema: { type: integer, minimum: 1, maximum: 100 }
       responses:
         "200":
           description: 通知页
@@ -1200,7 +1200,7 @@ paths:
         - name: noticeId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
         "200":
           description: 确认时间
@@ -1209,7 +1209,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  ackAt: {type: integer, format: int64}
+                  ackAt: { type: integer, format: int64 }
         "404":
           description: notification_not_found
         "403":
@@ -1222,7 +1222,7 @@ paths:
       parameters:
         - name: limit
           in: query
-          schema: {type: integer}
+          schema: { type: integer }
       responses:
         "200":
           description: 投递列表
@@ -1290,7 +1290,7 @@ paths:
         - name: caseId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
         "200":
           description: 案件详情
@@ -1311,20 +1311,20 @@ paths:
         - name: caseId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
         - name: section
           in: path
           required: true
-          schema: {type: string, enum: [timeline, uploads, identity, actions-evidence]}
+          schema: { type: string, enum: [timeline, uploads, identity, actions-evidence] }
         - name: limit
           in: query
-          schema: {type: integer, default: 100, maximum: 200}
+          schema: { type: integer, default: 100, maximum: 200 }
       responses:
         "200":
           description: 分栏内容（结构随 section 变化）
           content:
             application/json:
-              schema: {type: object}
+              schema: { type: object }
         "400":
           $ref: "#/components/responses/BadRequest"
         "403":
@@ -1340,7 +1340,7 @@ paths:
         - name: userId
           in: path
           required: true
-          schema: {type: integer, format: int64}
+          schema: { type: integer, format: int64 }
       requestBody:
         required: true
         content:
@@ -1350,11 +1350,11 @@ paths:
               additionalProperties: false
               required: [openid]
               properties:
-                openid: {type: string, minLength: 3, maxLength: 64}
+                openid: { type: string, minLength: 3, maxLength: 64 }
       responses:
-        "204": {description: 已绑定}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "403": {$ref: "#/components/responses/RecentMfaRequired"}
+        "204": { description: 已绑定 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/RecentMfaRequired" }
     delete:
       operationId: deleteSecurityQQBinding
       summary: 解绑 QQ openid
@@ -1363,11 +1363,11 @@ paths:
         - name: userId
           in: path
           required: true
-          schema: {type: integer, format: int64}
+          schema: { type: integer, format: int64 }
       responses:
-        "204": {description: 已解绑}
-        "403": {$ref: "#/components/responses/RecentMfaRequired"}
-        "404": {$ref: "#/components/responses/PrivateAdmissionNotFound"}
+        "204": { description: 已解绑 }
+        "403": { $ref: "#/components/responses/RecentMfaRequired" }
+        "404": { $ref: "#/components/responses/PrivateAdmissionNotFound" }
   /api/v1/security/cases/{caseId}/transitions:
     post:
       operationId: transitionSecurityCase
@@ -1432,7 +1432,7 @@ paths:
         - name: caseId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -1442,7 +1442,7 @@ paths:
               additionalProperties: false
               required: [seenVersion]
               properties:
-                seenVersion: {type: integer, format: int64}
+                seenVersion: { type: integer, format: int64 }
       responses:
         "200":
           description: 既読水位
@@ -1452,8 +1452,8 @@ paths:
                 type: object
                 required: [readUnix, seenVersion]
                 properties:
-                  readUnix: {type: integer, format: int64}
-                  seenVersion: {type: integer, format: int64}
+                  readUnix: { type: integer, format: int64 }
+                  seenVersion: { type: integer, format: int64 }
         "403":
           $ref: "#/components/responses/RecentMfaRequired"
         "404":
@@ -1469,7 +1469,7 @@ paths:
         - name: deliveryId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -1479,7 +1479,7 @@ paths:
               additionalProperties: false
               required: [targetVersion]
               properties:
-                targetVersion: {type: integer, format: int64}
+                targetVersion: { type: integer, format: int64 }
       responses:
         "200":
           description: 更新后的投递行
@@ -1501,7 +1501,7 @@ paths:
       parameters:
         - name: limit
           in: query
-          schema: {type: integer, default: 50, maximum: 100}
+          schema: { type: integer, default: 50, maximum: 100 }
       responses:
         "200":
           description: 命中列表（新到旧）
@@ -5159,42 +5159,42 @@ components:
           items:
             type: object
             properties:
-              seq: {type: integer, format: int64}
-              noticeId: {type: string}
-              kind: {type: string}
-              title: {type: string}
-              payload: {type: string}
-              createdUnix: {type: integer, format: int64}
-              acked: {type: boolean}
-        nextCursor: {type: integer, format: int64}
-        hasMore: {type: boolean}
-        watermark: {type: integer, format: int64}
+              seq: { type: integer, format: int64 }
+              noticeId: { type: string }
+              kind: { type: string }
+              title: { type: string }
+              payload: { type: string }
+              createdUnix: { type: integer, format: int64 }
+              acked: { type: boolean }
+        nextCursor: { type: integer, format: int64 }
+        hasMore: { type: boolean }
+        watermark: { type: integer, format: int64 }
     SecurityNotificationDelivery:
       type: object
       additionalProperties: false
       required: [deliveryId, channel, targetMasked, state]
       properties:
-        deliveryId: {type: string}
-        channel: {type: string, enum: [smtp, qq]}
-        targetMasked: {type: string}
-        state: {type: string, enum: [pending, attempted, accepted, failed]}
-        attempts: {type: integer, format: int64}
-        lastError: {type: string}
+        deliveryId: { type: string }
+        channel: { type: string, enum: [smtp, qq] }
+        targetMasked: { type: string }
+        state: { type: string, enum: [pending, attempted, accepted, failed] }
+        attempts: { type: integer, format: int64 }
+        lastError: { type: string }
     SecurityCase:
       type: object
       additionalProperties: false
       required: [caseId, title, state, severity, targetVersion]
       properties:
-        caseId: {type: string}
-        title: {type: string}
-        state: {type: string, enum: [open, claimed, closed]}
-        severity: {type: string, enum: [low, medium, high, critical]}
-        resolution: {type: string}
-        targetVersion: {type: integer, format: int64}
-        ownerUserId: {type: integer, format: int64}
-        reason: {type: string}
-        createdUnix: {type: integer, format: int64}
-        updatedUnix: {type: integer, format: int64}
+        caseId: { type: string }
+        title: { type: string }
+        state: { type: string, enum: [open, claimed, closed] }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        resolution: { type: string }
+        targetVersion: { type: integer, format: int64 }
+        ownerUserId: { type: integer, format: int64 }
+        reason: { type: string }
+        createdUnix: { type: integer, format: int64 }
+        updatedUnix: { type: integer, format: int64 }
     SecurityCaseDetail:
       type: object
       additionalProperties: false
@@ -5210,16 +5210,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SecurityCaseLink"
-        readSeenVersion: {type: integer, format: int64}
-        readUnix: {type: integer, format: int64}
+        readSeenVersion: { type: integer, format: int64 }
+        readUnix: { type: integer, format: int64 }
     SecurityCaseOpenRequest:
       type: object
       additionalProperties: false
       required: [title, severity, reason]
       properties:
-        title: {type: string, minLength: 1, maxLength: 200}
-        severity: {type: string, enum: [low, medium, high, critical]}
-        reason: {type: string, minLength: 1, maxLength: 512}
+        title: { type: string, minLength: 1, maxLength: 200 }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        reason: { type: string, minLength: 1, maxLength: 512 }
         eventLinks:
           type: array
           items:
@@ -5227,43 +5227,43 @@ components:
             additionalProperties: false
             required: [eventId, linkKind]
             properties:
-              eventId: {type: string}
-              linkKind: {type: string, enum: [fact, candidate]}
+              eventId: { type: string }
+              linkKind: { type: string, enum: [fact, candidate] }
     SecurityCaseTransitionRequest:
       type: object
       additionalProperties: false
       required: [action, targetVersion]
       properties:
-        action: {type: string, enum: [claim, close, reopen]}
-        targetVersion: {type: integer, format: int64}
-        reason: {type: string, maxLength: 512}
-        resolutionCode: {type: string, maxLength: 64}
+        action: { type: string, enum: [claim, close, reopen] }
+        targetVersion: { type: integer, format: int64 }
+        reason: { type: string, maxLength: 512 }
+        resolutionCode: { type: string, maxLength: 64 }
     SecurityCaseLink:
       type: object
       additionalProperties: false
       required: [caseId, eventId, linkKind]
       properties:
-        caseId: {type: string}
-        eventId: {type: string}
-        linkKind: {type: string, enum: [fact, candidate]}
-        linkedBy: {type: string}
-        linkedUnix: {type: integer, format: int64}
+        caseId: { type: string }
+        eventId: { type: string }
+        linkKind: { type: string, enum: [fact, candidate] }
+        linkedBy: { type: string }
+        linkedUnix: { type: integer, format: int64 }
     SecurityFinding:
       type: object
       additionalProperties: false
       required: [findingId, ruleId, ruleVersion, severity, subjectKey, summary]
       properties:
-        findingId: {type: string}
-        ruleId: {type: string}
-        ruleVersion: {type: integer}
-        severity: {type: string, enum: [low, medium, high, critical]}
-        confidence: {type: string, enum: [low, medium, high]}
-        subjectKey: {type: string}
-        windowFrom: {type: integer, format: int64}
-        windowTo: {type: integer, format: int64}
-        summary: {type: string}
-        caseId: {type: string}
-        createdUnix: {type: integer, format: int64}
+        findingId: { type: string }
+        ruleId: { type: string }
+        ruleVersion: { type: integer }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        confidence: { type: string, enum: [low, medium, high] }
+        subjectKey: { type: string }
+        windowFrom: { type: integer, format: int64 }
+        windowTo: { type: integer, format: int64 }
+        summary: { type: string }
+        caseId: { type: string }
+        createdUnix: { type: integer, format: int64 }
     PrivateAdmissionDecisionPreviewResponse:
       type: object
       additionalProperties: false

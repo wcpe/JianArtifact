@@ -210,7 +210,11 @@ export function getEnabledFormats(): Promise<EnabledFormats> {
 }
 
 /** 空库自举：创建首个管理员并返回会话令牌；装配强认证后须附安装认领票。 */
-export function bootstrap(username: string, password: string, claimTicket?: string): Promise<LoginResponse> {
+export function bootstrap(
+  username: string,
+  password: string,
+  claimTicket?: string,
+): Promise<LoginResponse> {
   return request<LoginResponse>("/auth/bootstrap", {
     method: "POST",
     body: claimTicket ? { username, password, claimTicket } : { username, password },
@@ -234,7 +238,10 @@ export function verifyLoginMfa(challengeToken: string, otp: string): Promise<Log
 }
 
 /** 凭 login_mfa 挑战 + 恢复码换 factor_recover 重绑登记（返回新登记 URI）。 */
-export function recoverLoginMfa(challengeToken: string, recoveryCode: string): Promise<MfaEnrollChallenge> {
+export function recoverLoginMfa(
+  challengeToken: string,
+  recoveryCode: string,
+): Promise<MfaEnrollChallenge> {
   return request<MfaEnrollChallenge>("/auth/mfa/recover", {
     method: "POST",
     body: { challengeToken, recoveryCode },
@@ -242,7 +249,11 @@ export function recoverLoginMfa(challengeToken: string, recoveryCode: string): P
 }
 
 /** 受控认领：口令 + 认领票换 factor_enroll 登记挑战。 */
-export function claimMfaEnroll(username: string, password: string, claimTicket: string): Promise<MfaEnrollChallenge> {
+export function claimMfaEnroll(
+  username: string,
+  password: string,
+  claimTicket: string,
+): Promise<MfaEnrollChallenge> {
   return request<MfaEnrollChallenge>("/auth/mfa/claim", {
     method: "POST",
     body: { username, password, claimTicket },
@@ -250,7 +261,11 @@ export function claimMfaEnroll(username: string, password: string, claimTicket: 
 }
 
 /** 用首枚 OTP 确认因子登记并领取恢复码批次。 */
-export function confirmMfaEnroll(challengeToken: string, otp: string, claimTicket?: string): Promise<MfaRecoveryCodes> {
+export function confirmMfaEnroll(
+  challengeToken: string,
+  otp: string,
+  claimTicket?: string,
+): Promise<MfaRecoveryCodes> {
   return request<MfaRecoveryCodes>("/auth/mfa/enroll/confirm", {
     method: "POST",
     body: claimTicket ? { challengeToken, otp, claimTicket } : { challengeToken, otp },
@@ -1956,7 +1971,12 @@ export function getSecurityCaseLinks(caseId: string): Promise<SecurityCaseLink[]
 
 export function transitionSecurityCase(
   caseId: string,
-  body: { action: "claim" | "close" | "reopen"; targetVersion: number; reason?: string; resolutionCode?: string },
+  body: {
+    action: "claim" | "close" | "reopen";
+    targetVersion: number;
+    reason?: string;
+    resolutionCode?: string;
+  },
 ): Promise<SecurityCase> {
   return request<SecurityCase>(`/security/cases/${encodeURIComponent(caseId)}/transitions`, {
     method: "POST",
@@ -2042,12 +2062,22 @@ export async function getSecurityCase(caseId: string): Promise<SecurityCaseDetai
   return request(`/security/cases/${encodeURIComponent(caseId)}`);
 }
 
-export type SecurityCaseSectionKind = 'timeline' | 'uploads' | 'identity' | 'actions-evidence';
+export type SecurityCaseSectionKind = "timeline" | "uploads" | "identity" | "actions-evidence";
 
-export async function getSecurityCaseSection(caseId: string, section: SecurityCaseSectionKind, limit = 100): Promise<Record<string, unknown[]>> {
+export async function getSecurityCaseSection(
+  caseId: string,
+  section: SecurityCaseSectionKind,
+  limit = 100,
+): Promise<Record<string, unknown[]>> {
   return request(`/security/cases/${encodeURIComponent(caseId)}/${section}?limit=${limit}`);
 }
 
-export async function markSecurityCaseRead(caseId: string, body: { seenVersion: number }): Promise<void> {
-  return request(`/security/cases/${encodeURIComponent(caseId)}/read`, { method: "PUT", body: JSON.stringify(body) });
+export async function markSecurityCaseRead(
+  caseId: string,
+  body: { seenVersion: number },
+): Promise<void> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}/read`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 }

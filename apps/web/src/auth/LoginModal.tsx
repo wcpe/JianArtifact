@@ -1,6 +1,17 @@
 //  登录模态框：取代整页 /login。任意位置经 useLoginModal.openLogin 弹出，
 // 登录成功后关闭并停留当前页；取消时执行调用方传入的 onCancel（如受保护页回落仓库列表）。
-import { Alert, Anchor, Button, Code, Group, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
+import {
+  Alert,
+  Anchor,
+  Button,
+  Code,
+  Group,
+  Modal,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { IconAlertCircle, IconKey, IconLogin } from "@tabler/icons-react";
 import {
@@ -40,7 +51,9 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
   // onCancel 用函数状态持有（setState 传入函数会被当 updater，需再包一层）。
   const [onCancel, setOnCancel] = useState<(() => void) | null>(null);
   // 挑战流步骤：口令 →（按需）OTP / 恢复码 / 认领票 → 因子登记 → 恢复码展示。
-  const [step, setStep] = useState<"credentials" | "mfa" | "recovery" | "claim" | "enroll" | "codes">("credentials");
+  const [step, setStep] = useState<
+    "credentials" | "mfa" | "recovery" | "claim" | "enroll" | "codes"
+  >("credentials");
   const [challengeToken, setChallengeToken] = useState("");
   const [enrollUri, setEnrollUri] = useState("");
   const [otp, setOtp] = useState("");
@@ -160,7 +173,11 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
 
   const handleClaim = () => {
     run(async () => {
-      const en = await api.claimMfaEnroll(form.values.username, form.values.password, claimTicket.trim());
+      const en = await api.claimMfaEnroll(
+        form.values.username,
+        form.values.password,
+        claimTicket.trim(),
+      );
       setChallengeToken(en.challengeToken);
       setEnrollUri(en.enrollmentUri);
       setStep("enroll");
@@ -169,7 +186,11 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
 
   const handleConfirmEnroll = () => {
     run(async () => {
-      const codes = await api.confirmMfaEnroll(challengeToken, otp.trim(), claimTicket || undefined);
+      const codes = await api.confirmMfaEnroll(
+        challengeToken,
+        otp.trim(),
+        claimTicket || undefined,
+      );
       setRecoveryCodes(codes.recoveryCodes);
       setStep("codes");
     });
@@ -235,7 +256,12 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
                 value={otp}
                 onChange={(e) => setOtp(e.currentTarget.value)}
               />
-              <Anchor component="button" type="button" size="sm" onClick={() => setStep("recovery")}>
+              <Anchor
+                component="button"
+                type="button"
+                size="sm"
+                onClick={() => setStep("recovery")}
+              >
                 {t("auth.useRecoveryCode")}
               </Anchor>
               <Group justify="flex-end">
@@ -262,7 +288,11 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
                 <Button variant="default" onClick={() => setStep("mfa")}>
                   {t("common.back")}
                 </Button>
-                <Button onClick={handleRecover} loading={submitting} disabled={!recoveryCode.trim()}>
+                <Button
+                  onClick={handleRecover}
+                  loading={submitting}
+                  disabled={!recoveryCode.trim()}
+                >
                   {t("auth.recoverFactor")}
                 </Button>
               </Group>
