@@ -351,10 +351,17 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 	if f.Attention == "pending" || f.Attention == "acknowledged" {
 		const ackExists = `EXISTS (SELECT 1 FROM audit_attention_ack ack
 			WHERE ack.source = observability_events.source AND ack.source_event_id = observability_events.source_event_id)`
+		// 确认语义只作用于风险成员（失败或高危动作）；普通成功事件从不属于批次，
+		// 不限定风险谓词会让 pending 退回「全部未确认事件」，把批次淹没在噪声里。
+		// 高危动作清单与 api.isHighRisk 保持一致。
+		const riskClause = `(result IN ('failed', 'error', 'rejected') OR action IN (
+			'repository.delete', 'repo.delete', 'asset.delete', 'user.delete', 'token.revoke',
+			'acl.set', 'settings.update', 'setting.set', 'migration.switch', 'migration.complete',
+			'group.delete', 'group.member.add', 'group.member.remove'))`
 		if f.Attention == "pending" {
-			query += " AND NOT " + ackExists
+			query += " AND " + riskClause + " AND NOT " + ackExists
 		} else {
-			query += " AND " + ackExists
+			query += " AND " + riskClause + " AND " + ackExists
 		}
 	}
 	if clause, values := observabilityCategoryClause(f.Categories); clause != "" {
