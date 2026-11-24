@@ -620,6 +620,40 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
   );
 }
 
+/**
+ * 风险批次标记：该事件属于服务端签发的风险关注批次时，列表中直接可见并可一键进入。
+ * 此前只有展开详情后才有「查看批次」，列表层看不出哪些事件被归入风险批次。
+ *
+ * 按钮本身在可点击的表格行内部：onKeyDown 必须 stopPropagation，
+ * 否则行的键盘处理器会 preventDefault + 触发行切换，按钮的 Enter/空格激活被吃掉。
+ */
+function RiskBadge({
+  attentionId,
+  onOpenAttention,
+}: {
+  attentionId: string;
+  onOpenAttention: (attentionId: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Badge
+      size="xs"
+      variant="filled"
+      color="orange"
+      component="button"
+      style={{ flexShrink: 0, cursor: "pointer" }}
+      onClick={(clickEvent) => {
+        clickEvent.stopPropagation();
+        onOpenAttention(attentionId);
+      }}
+      onKeyDown={(keyEvent) => keyEvent.stopPropagation()}
+      title={t("auditWorkbench.riskOpen")}
+    >
+      {t("auditWorkbench.riskBadge")}
+    </Badge>
+  );
+}
+
 function EventRow({
   event,
   expanded,
@@ -698,23 +732,8 @@ function EventRow({
                 {t("auditWorkbench.severityHigh")}
               </Badge>
             ) : null}
-            {/* 风险批次标记：该事件属于服务端签发的风险关注批次时，列表中直接可见并可一键进入。
-                此前只有展开详情后才有「查看批次」，列表层看不出哪些事件被归入风险批次。 */}
             {attentionId ? (
-              <Badge
-                size="xs"
-                variant="filled"
-                color="orange"
-                component="button"
-                style={{ flexShrink: 0, cursor: "pointer" }}
-                onClick={(clickEvent) => {
-                  clickEvent.stopPropagation();
-                  onOpenAttention(attentionId);
-                }}
-                title={t("auditWorkbench.riskOpen")}
-              >
-                {t("auditWorkbench.riskBadge")}
-              </Badge>
+              <RiskBadge attentionId={attentionId} onOpenAttention={onOpenAttention} />
             ) : null}
           </Group>
           {/* 谁 + 做了什么 + 什么时候：审计排查的核心三要素，直接铺在列表行上，
@@ -826,6 +845,10 @@ function OperationRow({
   const fileCount = operationFileCount(operation);
   // 徽章只报「另有几个文件」：行上已经展示了最新那个文件，+N 是折叠掉的其余 N 个。
   const collapsedCount = Math.max(fileCount - 1, 0);
+  // 折叠行同样给风险批次入口：任一成员事件属于批次即可直达，
+  // 否则批量删除等折叠场景仍须逐条展开详情才能打开批次抽屉。
+  const attentionId = operation.events.find((event) => event.attention?.attentionId)?.attention
+    ?.attentionId;
 
   return (
     <>
@@ -874,6 +897,9 @@ function OperationRow({
               <Badge size="xs" variant="light" color="red" style={{ flexShrink: 0 }}>
                 {t("auditWorkbench.severityHigh")}
               </Badge>
+            ) : null}
+            {attentionId ? (
+              <RiskBadge attentionId={attentionId} onOpenAttention={onOpenAttention} />
             ) : null}
           </Group>
           <Text size="xs" c="dimmed" truncate title={rowTarget}>

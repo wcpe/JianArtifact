@@ -270,6 +270,9 @@ export function OpsKpiBand({
               }
               style={{
                 height: "100%",
+                // 交互样式先铺：danger 的后置覆盖才能保住左侧红线与浅红底，
+                // 否则 kpiSelectableStyle 的 border 简写会把红线整体抹掉。
+                ...(item.onSelect ? kpiSelectableStyle(Boolean(item.active)) : null),
                 ...(item.danger
                   ? {
                       // 危险指标（失败 / 高危 / 待确认 > 0）用左侧色条 + 浅红底强化：
@@ -278,7 +281,6 @@ export function OpsKpiBand({
                       background: "var(--mantine-color-red-0)",
                     }
                   : null),
-                ...(item.onSelect ? kpiSelectableStyle(Boolean(item.active)) : null),
               }}
             >
               <Group gap="sm" wrap="nowrap" align="center">

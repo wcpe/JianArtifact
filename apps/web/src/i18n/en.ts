@@ -1465,6 +1465,7 @@ export const en = {
     drawerActionMultiple: "{{first}} and {{count}} kinds in total",
     drawerScaleValue: "{{total}} records",
     drawerScaleFailure: "({{count}} failed)",
+    drawerSampleScope: "(loaded sample only)",
     drawerShowContext: "Technical details",
     drawerHideContext: "Hide details",
     drawerContextRequest: "Request {{method}} {{path}} → {{status}}",

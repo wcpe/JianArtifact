@@ -89,10 +89,6 @@ export function AuditWorkbenchView() {
     [model],
   );
 
-  if (model.summary.forbidden) {
-    return <ForbiddenState message={t("auditWorkbench.forbidden")} />;
-  }
-
   const summary = model.summary.data;
 
   // KPI 点击联动：把「指标」直接变成「筛选动作」，看到异常数字即可一键下钻，
@@ -119,6 +115,12 @@ export function AuditWorkbenchView() {
     toggleArrayFilter("result", "failure");
   }, [toggleArrayFilter]);
 
+  // 无权限早退必须在全部 Hooks 之后：useCallback 等钩子已先执行，
+  // 权限一旦从有变无，提前 return 会造成 Hook 数量不一致直接崩溃。
+  if (model.summary.forbidden) {
+    return <ForbiddenState message={t("auditWorkbench.forbidden")} />;
+  }
+
   // 12 个指标在窄屏要占 4 行（近半屏），而记录表才是这页的主体。
   // 窄屏只渲染带 primary 标记的主指标（总数/失败/高危/待确认批次/成功率/平均耗时），
   // 其余用「更多指标」展开；宽屏（cards 变体）保持 12 个全展示。
@@ -130,9 +132,14 @@ export function AuditWorkbenchView() {
       tone: "blue",
       primary: true,
       icon: <IconFileAnalytics size={18} />,
-      // 总数 = 清空所有筛选，回到全量视图。
-      onSelect: () => setFilters({ category: [], result: [] }),
-      active: filters.category.length === 0 && filters.result.length === 0,
+      // 总数 = 清空所有筛选（含搜索关键词），回到全量视图；
+      // 只清结构化筛选会让列表仍被关键词过滤，卡片却显示为未筛选。
+      onSelect: () => {
+        setFilters({ category: [], result: [] });
+        model.setDraft("");
+        model.setSearch("");
+      },
+      active: filters.category.length === 0 && filters.result.length === 0 && model.search === "",
       selectHint: t("auditWorkbench.kpiClearFilters"),
     },
     {
@@ -226,12 +233,17 @@ export function AuditWorkbenchView() {
       danger: model.pendingAttentionCount > 0,
       icon: <IconBell size={18} />,
       // 待确认批次：切到「待处理」风险状态筛选（服务端支持的 attention 维度）。
-      onSelect: () =>
-        setFilters({
-          ...filters,
-          attention: filters.attention === "pending" ? undefined : "pending",
-        }),
-      active: filters.attention === "pending",
+      // 卡片本身统计的是最近 24h 的全部待确认批次，点击时对齐时间范围并清掉
+      // 其余筛选，否则在别的时段/筛选下卡片有数字、列表却查不到对应批次。
+      onSelect: () => {
+        if (filters.attention === "pending") {
+          setFilters({ ...filters, attention: undefined });
+        } else {
+          setFilters({ category: [], result: [], attention: "pending" });
+          model.setRange("24h");
+        }
+      },
+      active: filters.attention === "pending" && model.range === "24h",
       selectHint: t("auditWorkbench.kpiFilterPending"),
     },
     {
