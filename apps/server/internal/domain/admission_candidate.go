@@ -37,17 +37,20 @@ var (
 
 // AdmissionStatus 是公开状态适配器可使用的脱敏投影，不含内部文件键、源 IP 或路径。
 type AdmissionStatus struct {
-	OperationID     string
-	RepositoryID    int64
-	State           string
-	TargetVersion   int64
-	ManifestVersion *int64
-	ManifestDigest  *string
-	ExpiresAt       time.Time
-	ErrorCode       string
+	OperationID      string
+	RepositoryID     int64
+	State            string
+	TargetVersion    int64
+	ManifestVersion  *int64
+	ManifestDigest   *string
+	ExpiresAt        time.Time
+	ErrorCode        string
+	PublishedAssetID *int64
 }
 
-// AdmissionService 只登记和追踪私有候选，不解析包、不审批、不发布。
+// admissionStatus 只投影白名单字段。
+
+// AdmissionService 登记和追踪私有候选；批准后把字节提升为公开资产（FR-169）。
 type AdmissionService struct {
 	rows         *repository.AdmissionCandidateRepo
 	repos        *repository.RepoRepo
@@ -55,11 +58,15 @@ type AdmissionService struct {
 	events       *repository.SecurityEventRepo
 	blobs        *blobstore.Store
 	freeze       *FreezeController
+	assets       *AssetService
 	bootID       string
 	receiving    sync.Map
 	intake       chan struct{}
 	verification chan struct{}
 }
+
+// SetAssetService 注入提升发布所需的资产服务（在首个请求前调用）。
+func (s *AdmissionService) SetAssetService(assets *AssetService) { s.assets = assets }
 
 func NewAdmissionService(db *persistence.DB, blobs *blobstore.Store, users *repository.UserRepo, repos *repository.RepoRepo, freeze *FreezeController) *AdmissionService {
 	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
@@ -228,8 +235,17 @@ func (s *AdmissionService) Status(ctx context.Context, principal *auth.Principal
 		if latest.TargetVersion != row.TargetVersion {
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
+		// 完整性裁定通过 → 转待审，批准才是发布（FR-169）。
+		if latest.State == "staged" {
+			return s.transitionStatus(ctx, principal, latest, "awaiting_review", "")
+		}
 		return admissionStatus(latest), nil
-	case "rejected", "expired":
+	case "awaiting_review":
+		if time.Now().Unix() >= row.ExpiresUnix {
+			return s.transitionStatus(ctx, principal, row, "expired", "")
+		}
+		return admissionStatus(row), nil
+	case "rejected", "expired", "published":
 		return admissionStatus(row), nil
 	default:
 		return AdmissionStatus{}, ErrAdmissionUnavailable
@@ -339,6 +355,42 @@ func (s *AdmissionService) transitionStatus(ctx context.Context, p *auth.Princip
 	return admissionStatus(row), nil
 }
 
+// transitionStatusAdmin 与 transitionStatus 同构，但按操作号取行（管理员可处置他人候选）。
+func (s *AdmissionService) transitionStatusAdmin(ctx context.Context, row repository.AdmissionCandidateRow, state, code string) (AdmissionStatus, error) {
+	err := s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+		current, err := s.rows.GetAnyTx(ctx, tx, row.OperationID)
+		if err != nil {
+			return err
+		}
+		if current.RepositoryID != row.RepositoryID || current.TargetVersion != row.TargetVersion || current.State != row.State {
+			return repository.ErrNotFound
+		}
+		return s.rows.TransitionTx(ctx, tx, row, state, code)
+	}, s.commitWhenWritable)
+	if errors.Is(err, repository.ErrAdmissionCommitUnknown) || errors.Is(err, repository.ErrNotFound) {
+		var observed repository.AdmissionCandidateRow
+		readErr := s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+			r, err := s.rows.GetAnyTx(ctx, tx, row.OperationID)
+			if err == nil {
+				observed = r
+			}
+			return err
+		})
+		if readErr != nil {
+			return AdmissionStatus{}, admissionServiceError(readErr)
+		}
+		if observed.State == state && observed.ErrorCode == code && observed.TargetVersion == row.TargetVersion+1 {
+			return admissionStatus(observed), nil
+		}
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	if err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	row.State, row.ErrorCode, row.TargetVersion = state, code, row.TargetVersion+1
+	return admissionStatus(row), nil
+}
+
 func (s *AdmissionService) observeCommit(ctx context.Context, row repository.AdmissionCandidateRow) (observed repository.AdmissionCandidateRow, err error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
@@ -395,7 +447,7 @@ func admissionServiceError(err error) error {
 
 func admissionStatus(r repository.AdmissionCandidateRow) AdmissionStatus {
 	return AdmissionStatus{OperationID: r.OperationID, RepositoryID: r.RepositoryID, State: r.State, TargetVersion: r.TargetVersion, ManifestVersion: r.ManifestVersion,
-		ManifestDigest: r.ManifestDigest, ExpiresAt: time.Unix(r.ExpiresUnix, 0).UTC(), ErrorCode: r.ErrorCode}
+		ManifestDigest: r.ManifestDigest, ExpiresAt: time.Unix(r.ExpiresUnix, 0).UTC(), ErrorCode: r.ErrorCode, PublishedAssetID: r.PublishedAssetID}
 }
 
 // 准入候选的规范路径比审计事件路径更严：审计须覆盖制品键的全部合法字符（含
@@ -409,4 +461,66 @@ func admissionManifestDigest(r repository.AdmissionCandidateRow, hash string, si
 	// 固定顺序、类型与编码版本；输入摘要不会被误作完整清单摘要。
 	data, _ := json.Marshal([]any{"jianartifact.private-raw-manifest.v1", r.RepositoryID, "raw", "asset.put", r.CanonicalPath, "input", r.ContentType, "sha256:" + hash, size})
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+}
+
+// ── FR-169 最小准入流水线：检测结论 + 管理员审批 + 提升发布 ─────────────────
+
+var ErrAdmissionDecisionRejected = errors.New("准入裁决被拒")
+
+// Decide 管理员处置候选：awaiting_review → approve（提升字节为公开资产）或 reject。
+// reason 必填；批准在最终事务内先复核仓库与权限，再把状态与资产引用同事务裁决。
+func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operationID, action, reason string) (AdmissionStatus, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return AdmissionStatus{}, ErrAdmissionForbidden
+	}
+	if reason == "" || (action != "approve" && action != "reject") {
+		return AdmissionStatus{}, ErrValidation
+	}
+	var row repository.AdmissionCandidateRow
+	err := s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+		r, err := s.rows.GetAnyTx(ctx, tx, operationID)
+		if err != nil {
+			return err
+		}
+		row = r
+		return nil
+	})
+	if err != nil {
+		return AdmissionStatus{}, repository.ErrNotFound
+	}
+	if row.State != "awaiting_review" {
+		return AdmissionStatus{}, ErrAdmissionDecisionRejected
+	}
+	if row.BlobHash == nil || row.SizeBytes == nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	if action == "reject" {
+		return s.transitionStatusAdmin(ctx, row, "rejected", "manual_reject")
+	}
+	// approve：隔离区外先做字节搬运（私有→内容寻址活动存储），再同事务标 published。
+	if s.assets == nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	if err := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes); err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	rc, size, err := s.blobs.OpenRegisteredPrivateCandidate(ctx, row.ObjectKey)
+	if err != nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	defer rc.Close()
+	repo, err := s.repoByID(ctx, row.RepositoryID)
+	if err != nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	asset, err := s.assets.Put(repo.Name, row.CanonicalPath, io.LimitReader(rc, size), row.ContentType)
+	if err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	row.PublishedAssetID = &asset.ID
+	return s.transitionStatusAdmin(ctx, row, "published", "")
+}
+
+func (s *AdmissionService) repoByID(ctx context.Context, id int64) (*repository.Repository, error) {
+	return s.repos.GetByID(id)
 }

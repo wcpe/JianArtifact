@@ -156,3 +156,42 @@ func (s *Store) VerifyRegisteredPrivateCandidate(ctx context.Context, key, diges
 
 // NewRegisteredPrivateCandidateKey 编码服务端随机字节；文件键不使用操作号或摘要。
 func NewRegisteredPrivateCandidateKey(random [16]byte) string { return hex.EncodeToString(random[:]) }
+
+// OpenRegisteredPrivateCandidate 打开已登记候选字节供提升读取（提升路径专用，
+// 与下载/公开读无关；完整性由 VerifyRegisteredPrivateCandidate 先裁定）。
+func (s *Store) OpenRegisteredPrivateCandidate(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	if !validPrivateCandidateKey(key) {
+		return nil, 0, ErrInvalidPrivateCandidateInput
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	root, err := s.registeredCandidateRoot(false)
+	if err != nil {
+		return nil, 0, err
+	}
+	f, err := root.Open(key)
+	if err != nil {
+		root.Close()
+		return nil, 0, ErrPrivateCandidateIntegrity
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		root.Close()
+		return nil, 0, privateCandidateFileError("核对封存对象", err)
+	}
+	return &rootBoundFile{File: f, root: root}, info.Size(), nil
+}
+
+// rootBoundFile 关闭时同时释放 os.Root 边界。
+type rootBoundFile struct {
+	*os.File
+	root *os.Root
+}
+
+func (r *rootBoundFile) Close() error {
+	err := r.File.Close()
+	r.root.Close()
+	return err
+}

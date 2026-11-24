@@ -39,6 +39,7 @@ type AdmissionCandidateRow struct {
 	StagedEventID      *string `db:"staged_event_id" json:"-"`
 	ErrorCode          string  `db:"error_code" json:"-"`
 	ExpiresUnix        int64   `db:"expires_unix" json:"-"`
+	PublishedAssetID   *int64  `db:"published_asset_id" json:"-"`
 }
 
 type AdmissionCandidateRepo struct{ db *persistence.DB }
@@ -105,8 +106,8 @@ func (r *AdmissionCandidateRepo) SealTx(ctx context.Context, tx *sqlx.Tx, row Ad
 }
 
 func (r *AdmissionCandidateRepo) TransitionTx(ctx context.Context, tx *sqlx.Tx, row AdmissionCandidateRow, state, code string) error {
-	result, err := tx.ExecContext(ctx, `UPDATE private_admission_candidate SET state=?,error_code=?,target_version=target_version+1
- WHERE operation_id=? AND target_version=? AND state=?`, state, code, row.OperationID, row.TargetVersion, row.State)
+	result, err := tx.ExecContext(ctx, `UPDATE private_admission_candidate SET state=?,error_code=?,target_version=target_version+1,published_asset_id=COALESCE(?, published_asset_id)
+ WHERE operation_id=? AND target_version=? AND state=?`, state, code, row.PublishedAssetID, row.OperationID, row.TargetVersion, row.State)
 	return admissionCandidateUpdated(result, err)
 }
 
@@ -132,4 +133,14 @@ func AdmissionPublishGrantTx(ctx context.Context, tx *sqlx.Tx, repoID, userID in
 	var allowed bool
 	err = tx.GetContext(ctx, &allowed, query, args...)
 	return allowed, err
+}
+
+// GetAnyTx 按操作号取候选（管理员裁决用，不限定发起者）。
+func (r *AdmissionCandidateRepo) GetAnyTx(ctx context.Context, tx *sqlx.Tx, operationID string) (AdmissionCandidateRow, error) {
+	var row AdmissionCandidateRow
+	err := tx.GetContext(ctx, &row, `SELECT * FROM private_admission_candidate WHERE operation_id=?`, operationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return row, err
 }

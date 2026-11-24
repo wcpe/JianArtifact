@@ -240,22 +240,35 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 	get(staged.OperationID, other, http.StatusNotFound, "admission_not_found")
 	get("invalid", token, http.StatusNotFound, "admission_not_found")
 	check := get(staged.OperationID, token, http.StatusOK, "")
-	if check.OperationId != staged.OperationID || check.RepositoryId != repo.ID || check.State != "staged" || check.Coverage != "unknown" || check.ManifestDigest == nil || *check.ManifestDigest != *staged.ManifestDigest || check.ManifestVersion == nil || *check.ManifestVersion != 1 {
+	if check.OperationId != staged.OperationID || check.RepositoryId != repo.ID || check.State != "awaiting_review" || check.Coverage != "unknown" || check.ManifestDigest == nil || *check.ManifestDigest != *staged.ManifestDigest || check.ManifestVersion == nil || *check.ManifestVersion != 1 {
 		t.Fatalf("重启后不一致：%+v", check)
 	}
-	if get(same.OperationID, token, http.StatusOK, "").State != "staged" {
+	if get(same.OperationID, token, http.StatusOK, "").State != "awaiting_review" {
 		t.Fatal("同摘要私有对象也应独立封存")
 	}
 	// 目录暂不可判定不可被写成永久损坏，修复本机测试目录后原状态可读取。
+	// 需要仍处于 staged 的候选：awaiting_review 不再触碰封存文件。
+	lateReq := httptest.NewRequest(http.MethodPost, "http://localhost/internal-candidate-test", nil)
+	lateReq.RemoteAddr = "127.0.0.1:49154"
+	lateReq.Header.Set("Authorization", "Bearer "+token)
+	latePrincipal, err := auth.NewAuthenticator(next.jwt, next.store).AdmissionPrincipal(lateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateCtx := auditctx.WithSource(t.Context(), cfg.SourcePolicy.Resolve(lateReq, rand.Text()))
+	var lateOp string
+	if _, err := next.admission.Prepare(lateCtx, latePrincipal, repo.ID, "late.txt", "text/plain", strings.NewReader("迟到的候选"), func(id string) { lateOp = id }); err != nil {
+		t.Fatal(err)
+	}
 	offline := privateDir + "-test-offline"
 	if err := os.Rename(privateDir, offline); err != nil {
 		t.Fatal(err)
 	}
-	get(staged.OperationID, token, http.StatusServiceUnavailable, "admission_unavailable")
+	get(lateOp, token, http.StatusServiceUnavailable, "admission_unavailable")
 	if err := os.Rename(offline, privateDir); err != nil {
 		t.Fatal(err)
 	}
-	if get(staged.OperationID, token, http.StatusOK, "").State != "staged" {
+	if get(lateOp, token, http.StatusOK, "").State != "awaiting_review" {
 		t.Fatal("暂时 I/O 被误判为硬失败")
 	}
 	for _, op := range []string{broken.OperationID, corrupt.OperationID} {

@@ -1142,12 +1142,15 @@ func (e PrivateAdmissionCandidateStatusCoverage) Valid() bool {
 // Defines values for PrivateAdmissionCandidateStatusErrorCode.
 const (
 	AdmissionIntegrityFailed PrivateAdmissionCandidateStatusErrorCode = "admission_integrity_failed"
+	ManualReject             PrivateAdmissionCandidateStatusErrorCode = "manual_reject"
 )
 
 // Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusErrorCode enum.
 func (e PrivateAdmissionCandidateStatusErrorCode) Valid() bool {
 	switch e {
 	case AdmissionIntegrityFailed:
+		return true
+	case ManualReject:
 		return true
 	default:
 		return false
@@ -1156,19 +1159,43 @@ func (e PrivateAdmissionCandidateStatusErrorCode) Valid() bool {
 
 // Defines values for PrivateAdmissionCandidateStatusState.
 const (
-	Expired  PrivateAdmissionCandidateStatusState = "expired"
-	Rejected PrivateAdmissionCandidateStatusState = "rejected"
-	Staged   PrivateAdmissionCandidateStatusState = "staged"
+	AwaitingReview PrivateAdmissionCandidateStatusState = "awaiting_review"
+	Expired        PrivateAdmissionCandidateStatusState = "expired"
+	Published      PrivateAdmissionCandidateStatusState = "published"
+	Rejected       PrivateAdmissionCandidateStatusState = "rejected"
+	Staged         PrivateAdmissionCandidateStatusState = "staged"
 )
 
 // Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusState enum.
 func (e PrivateAdmissionCandidateStatusState) Valid() bool {
 	switch e {
+	case AwaitingReview:
+		return true
 	case Expired:
+		return true
+	case Published:
 		return true
 	case Rejected:
 		return true
 	case Staged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionDecisionRequestAction.
+const (
+	Approve PrivateAdmissionDecisionRequestAction = "approve"
+	Reject  PrivateAdmissionDecisionRequestAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionDecisionRequestAction enum.
+func (e PrivateAdmissionDecisionRequestAction) Valid() bool {
+	switch e {
+	case Approve:
+		return true
+	case Reject:
 		return true
 	default:
 		return false
@@ -3958,7 +3985,7 @@ type PrivateAdmissionCandidateStatus struct {
 	// Coverage 仅跟踪私有状态，不证明扫描覆盖。
 	Coverage PrivateAdmissionCandidateStatusCoverage `json:"coverage"`
 
-	// ErrorCode 已确认的硬完整性失败；无此事实时省略。
+	// ErrorCode 已确认的硬完整性失败或管理员驳回；无此事实时省略。
 	ErrorCode *PrivateAdmissionCandidateStatusErrorCode `json:"errorCode,omitempty"`
 
 	// ExpiresAt 候选在服务端的 UTC 到期时间。
@@ -3970,9 +3997,12 @@ type PrivateAdmissionCandidateStatus struct {
 	// ManifestVersion 已确认的清单版本，未确认时省略。
 	ManifestVersion *int64 `json:"manifestVersion,omitempty"`
 	OperationId     string `json:"operationId"`
-	RepositoryId    int64  `json:"repositoryId"`
 
-	// State 已封存、拒绝或已过期；已封存不表示已发布。
+	// PublishedAssetId 批准后提升为公开资产的资产号；未发布时省略。
+	PublishedAssetId *int64 `json:"publishedAssetId,omitempty"`
+	RepositoryId     int64  `json:"repositoryId"`
+
+	// State 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
 	State         PrivateAdmissionCandidateStatusState `json:"state"`
 	TargetVersion int64                                `json:"targetVersion"`
 }
@@ -3980,11 +4010,23 @@ type PrivateAdmissionCandidateStatus struct {
 // PrivateAdmissionCandidateStatusCoverage 仅跟踪私有状态，不证明扫描覆盖。
 type PrivateAdmissionCandidateStatusCoverage string
 
-// PrivateAdmissionCandidateStatusErrorCode 已确认的硬完整性失败；无此事实时省略。
+// PrivateAdmissionCandidateStatusErrorCode 已确认的硬完整性失败或管理员驳回；无此事实时省略。
 type PrivateAdmissionCandidateStatusErrorCode string
 
-// PrivateAdmissionCandidateStatusState 已封存、拒绝或已过期；已封存不表示已发布。
+// PrivateAdmissionCandidateStatusState 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
 type PrivateAdmissionCandidateStatusState string
+
+// PrivateAdmissionDecisionRequest defines model for PrivateAdmissionDecisionRequest.
+type PrivateAdmissionDecisionRequest struct {
+	// Action 批准提升为公开资产或驳回候选。
+	Action PrivateAdmissionDecisionRequestAction `json:"action"`
+
+	// Reason 处置原因，写入裁决事实。
+	Reason string `json:"reason"`
+}
+
+// PrivateAdmissionDecisionRequestAction 批准提升为公开资产或驳回候选。
+type PrivateAdmissionDecisionRequestAction string
 
 // ProtocolMetricPoint defines model for ProtocolMetricPoint.
 type ProtocolMetricPoint struct {
@@ -5032,6 +5074,9 @@ type PrivateAdmissionUnavailable = Error
 // PublishPolicyWriteConflict defines model for PublishPolicyWriteConflict.
 type PublishPolicyWriteConflict = Error
 
+// RecentMfaRequired defines model for RecentMfaRequired.
+type RecentMfaRequired = Error
+
 // SecurityAuditCursorExpired defines model for SecurityAuditCursorExpired.
 type SecurityAuditCursorExpired = Error
 
@@ -5602,6 +5647,9 @@ type PreviewSecurityActionJSONRequestBody = SecurityActionPreviewRequest
 
 // ExecuteSecurityActionJSONRequestBody defines body for ExecuteSecurityAction for application/json ContentType.
 type ExecuteSecurityActionJSONRequestBody = SecurityActionExecuteRequest
+
+// DecidePrivateAdmissionCandidateJSONRequestBody defines body for DecidePrivateAdmissionCandidate for application/json ContentType.
+type DecidePrivateAdmissionCandidateJSONRequestBody = PrivateAdmissionDecisionRequest
 
 // BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
 type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
@@ -6215,6 +6263,9 @@ type ServerInterface interface {
 	// GetPrivateAdmissionCandidate 查询本人私有候选的状态
 	// (GET /api/v1/security/admission/candidates/{operationId})
 	GetPrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// DecidePrivateAdmissionCandidate 管理员裁决待审私有候选
+	// (POST /api/v1/security/admission/candidates/{operationId}/decisions)
+	DecidePrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
 	// ListEvidenceHolds 保全持有清单（管理员只读）
 	// (GET /api/v1/security/holds)
 	ListEvidenceHolds(c *gin.Context)
@@ -9134,6 +9185,31 @@ func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) 
 	siw.Handler.GetPrivateAdmissionCandidate(c, operationId)
 }
 
+// DecidePrivateAdmissionCandidate operation middleware
+func (siw *ServerInterfaceWrapper) DecidePrivateAdmissionCandidate(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "operationId" -------------
+	var operationId PrivateAdmissionOperationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "operationId", c.Param("operationId"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DecidePrivateAdmissionCandidate(c, operationId)
+}
+
 // ListEvidenceHolds operation middleware
 func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
 
@@ -9824,6 +9900,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
+	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions", wrapper.DecidePrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
 	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies", wrapper.PutPublishPolicies)
 	router.GET(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.GetPublishPolicy)

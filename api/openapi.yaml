@@ -1170,6 +1170,43 @@ paths:
           $ref: "#/components/responses/PrivateAdmissionNotFound"
         "503":
           $ref: "#/components/responses/PrivateAdmissionUnavailable"
+  /api/v1/security/admission/candidates/{operationId}/decisions:
+    post:
+      operationId: decidePrivateAdmissionCandidate
+      summary: 管理员裁决待审私有候选
+      description: |
+        仅管理员且经近期强认证复核可调用。`awaiting_review` 候选可 `approve`（提升封存字节为公开资产并置 `published`）
+        或 `reject`（置 `rejected`）。批准不是发布：提升按顺序先搬运字节、再同事务推进状态；状态未裁决前字节不公开。
+        非待审状态统一返回 409 `admission_decision_conflict`。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PrivateAdmissionOperationIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrivateAdmissionDecisionRequest"
+      responses:
+        "200":
+          description: 裁决后的候选状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateAdmissionCandidateStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "409":
+          description: 候选不在待审状态；`error.code` 为 `admission_decision_conflict`。
+        "503":
+          $ref: "#/components/responses/PrivateAdmissionUnavailable"
   /api/v1/users/{id}/password:
     post:
       operationId: changePassword
@@ -3744,6 +3781,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    RecentMfaRequired:
+      description: 敏感操作缺少窗口内的近期强认证；`error.code` 为 `recent_mfa_required`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     PublishPolicyWriteConflict:
       description: 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。
       content:
@@ -4678,8 +4721,8 @@ components:
           description: 已确认的清单摘要，未确认时省略。
         state:
           type: string
-          enum: [staged, rejected, expired]
-          description: 已封存、拒绝或已过期；已封存不表示已发布。
+          enum: [staged, awaiting_review, published, rejected, expired]
+          description: 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
         coverage:
           type: string
           enum: [unknown]
@@ -4688,10 +4731,29 @@ components:
           type: string
           format: date-time
           description: 候选在服务端的 UTC 到期时间。
+        publishedAssetId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 批准后提升为公开资产的资产号；未发布时省略。
         errorCode:
           type: string
-          enum: [admission_integrity_failed]
-          description: 已确认的硬完整性失败；无此事实时省略。
+          enum: [admission_integrity_failed, manual_reject]
+          description: 已确认的硬完整性失败或管理员驳回；无此事实时省略。
+    PrivateAdmissionDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+          description: 批准提升为公开资产或驳回候选。
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: 处置原因，写入裁决事实。
     SecurityAuditEventType:
       type: string
       description: |
