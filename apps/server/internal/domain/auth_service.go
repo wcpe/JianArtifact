@@ -95,6 +95,49 @@ func (s *AuthService) Bootstrap(username, password string) (token string, user *
 	return token, user, nil
 }
 
+// BootstrapWithClaim 空库安装认领：口令 + claim_install 票 + 待登记因子 + 挑战原子进入。
+// 票绑定安装槽位（无账号）；因子激活时票与挑战同事务消费（ConfirmFactorEnrollment），
+// 随后走标准 mfa 登录门。不直接签发会话——票不兑换管理 JWT。
+func (s *AuthService) BootstrapWithClaim(ctx context.Context, username, password, ticket string) (*MfaEnrollment, *repository.User, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, nil, err
+	}
+	if s.mfa == nil || s.mfa.cipher == nil {
+		return nil, nil, ErrMfaFactorUnavailable
+	}
+	if username == AnonymousUsername || ticket == "" {
+		return nil, nil, ErrValidation
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 先验票（不消费），再建管理员，再种待登记因子与挑战；确认阶段同事务消费票与挑战。
+	tokenHash := hashChallengeToken(ticket)
+	if err := s.mfa.factors.Write(ctx, func(tx *sqlx.Tx) error {
+		_, err := repository.TouchClaimTicketTx(ctx, tx, tokenHash, repository.ClaimPurposeInstall, time.Now().Unix())
+		return err
+	}); err != nil {
+		return nil, nil, mapChallengeErr(err)
+	}
+	var account repository.CredentialAccount
+	if err := s.users.CredentialWrite(ctx, func(tx *sqlx.Tx) error {
+		u, err := repository.BootstrapCredentialAccountTx(ctx, tx, username, hash, AnonymousUsername)
+		if errors.Is(err, repository.ErrCredentialRejected) {
+			err = ErrAlreadyInitialized
+		}
+		account = u
+		return err
+	}); err != nil {
+		return nil, nil, err
+	}
+	en, err := s.mfa.beginInstallEnrollment(ctx, account)
+	if err != nil {
+		return nil, nil, err
+	}
+	return en, &account.User, nil
+}
+
 // Login 校验口令并签发会话令牌。用户不存在 / 停用 / 口令错误统一返回 ErrInvalidCredentials。
 // 内置 anonymous 主体禁止登录。已启用强因子的账号返回 ErrMfaRequired——
 // 旧签名的调用方拿不到挑战明细，受限结果的签发走 LoginOutcome。

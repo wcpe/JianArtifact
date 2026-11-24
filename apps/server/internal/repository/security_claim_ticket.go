@@ -66,7 +66,7 @@ func TouchClaimTicketTx(ctx context.Context, tx *sqlx.Tx, tokenHash, purpose str
 	if err != nil {
 		return SecurityClaimTicket{}, err
 	}
-	if t.State != ChallengeStateIssued || t.Purpose != purpose {
+	if t.State != ChallengeStateIssued || (purpose != "" && t.Purpose != purpose) {
 		return SecurityClaimTicket{}, ErrSecurityChallengeRejected
 	}
 	if t.ExpiresAt <= now {

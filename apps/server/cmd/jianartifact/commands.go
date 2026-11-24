@@ -228,13 +228,14 @@ func parseNexusTime(s string) (string, error) {
 // 票绑定目标账号当前代次，15 分钟/5 次尝试；明文仅此处展示一次，用于网页认领引导。
 func adminMfaClaim(args []string) error {
 	fs := flag.NewFlagSet("admin mfa-claim", flag.ContinueOnError)
-	username := fs.String("username", "", "目标账号用户名（必填）")
+	username := fs.String("username", "", "目标账号用户名（--install 时忽略）")
+	install := fs.Bool("install", false, "为空库首个管理员出具 claim_install 安装认领票")
 	reason := fs.String("reason", "", "认领原因（审计留痕）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *username == "" {
-		return errors.New("必须提供 --username")
+	if !*install && *username == "" {
+		return errors.New("必须提供 --username（或 --install）")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -248,10 +249,18 @@ func adminMfaClaim(args []string) error {
 	if svc.mfaSvc == nil {
 		return errors.New("强认证服务未装配（因子密钥缺失）")
 	}
-	t, err := svc.mfaSvc.IssueClaimTicket(context.Background(), *username,
-		repository.ClaimPurposeAdmin, "cli", *reason)
+	var t *domain.ClaimTicket
+	if *install {
+		t, err = svc.mfaSvc.IssueInstallClaimTicket(context.Background(), "cli", *reason)
+	} else {
+		t, err = svc.mfaSvc.IssueClaimTicket(context.Background(), *username,
+			repository.ClaimPurposeAdmin, "cli", *reason)
+	}
 	if err != nil {
 		return fmt.Errorf("出具认领票失败：%w", err)
+	}
+	if t.Username == "" {
+		t.Username = "(安装槽位)"
 	}
 	fmt.Printf("已为账号 %q 出具一次性认领票（%s 过期，仅展示一次）：\n%s\n",
 		t.Username, t.ExpiresAt.Local().Format("2006-01-02 15:04:05"), t.Ticket)

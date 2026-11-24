@@ -3018,8 +3018,10 @@ type BatchDeleteAssetsResponse struct {
 
 // BootstrapRequest defines model for BootstrapRequest.
 type BootstrapRequest struct {
-	Password string `json:"password"`
-	Username string `json:"username"`
+	// ClaimTicket claim_install 安装认领票；提供时走受控安装（不直签会话，返回登记挑战）
+	ClaimTicket *string `json:"claimTicket,omitempty"`
+	Password    string  `json:"password"`
+	Username    string  `json:"username"`
 }
 
 // CapacityPoint defines model for CapacityPoint.
@@ -3413,6 +3415,9 @@ type LoginResponse struct {
 
 	// ChallengeToken login_mfa 受限挑战明文；仅 next=mfa_required 时存在，展示一次后不持久
 	ChallengeToken *string `json:"challengeToken,omitempty"`
+
+	// EnrollmentUri otpauth:// URI；仅受控安装/认领引导返回，展示一次后不持久
+	EnrollmentUri *string `json:"enrollmentUri,omitempty"`
 
 	// Next 登录签发裁决；authenticated 才发放会话令牌
 	Next LoginResponseNext `json:"next"`

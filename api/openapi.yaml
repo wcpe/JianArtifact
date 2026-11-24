@@ -5461,6 +5461,9 @@ components:
         password:
           type: string
           minLength: 8
+        claimTicket:
+          type: string
+          description: claim_install 安装认领票；提供时走受控安装（不直签会话，返回登记挑战）
     LoginRequest:
       type: object
       required: [username, password]
@@ -5489,6 +5492,9 @@ components:
         challengeExpiresAt:
           type: string
           description: 挑战过期时间（RFC3339）
+        enrollmentUri:
+          type: string
+          description: otpauth:// URI；仅受控安装/认领引导返回，展示一次后不持久
         user:
           $ref: "#/components/schemas/User"
     MfaEnrollResponse:

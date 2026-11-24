@@ -41,6 +41,51 @@ func (s *SecurityMfaService) IssueClaimTicket(ctx context.Context, username, pur
 	return s.issueClaimTicketFor(ctx, account, purpose, issuedBy, reason)
 }
 
+// IssueInstallClaimTicket 为未初始化实例出具 claim_install 票（空库首管理员引导）。
+// 票无账号绑定（尚无主体）：绑定「安装事务与唯一槽位」，仅未初始化判据下可出具。
+func (s *SecurityMfaService) IssueInstallClaimTicket(ctx context.Context, issuedBy, reason string) (*ClaimTicket, error) {
+	if s.cipher == nil {
+		return nil, ErrMfaFactorUnavailable
+	}
+	var initialized bool
+	if err := s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+		var n int
+		if err := tx.GetContext(ctx, &n, `SELECT count(*) FROM user WHERE username<>?`, AnonymousUsername); err != nil {
+			return err
+		}
+		initialized = n > 0
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if initialized {
+		return nil, ErrInvalidAuthChallenge
+	}
+	token, err := randB32(32)
+	if err != nil {
+		return nil, err
+	}
+	token = "tk-" + token
+	now := s.now()
+	t := repository.SecurityClaimTicket{
+		TicketID:          "tki-" + uuid.NewString(),
+		Purpose:           repository.ClaimPurposeInstall,
+		TokenHash:         hashChallengeToken(token),
+		AccountEpoch:      0,
+		IssuedBy:          issuedBy,
+		Reason:            reason,
+		AttemptsRemaining: securityClaimTicketAttempts,
+		ExpiresAt:         now.Add(securityClaimTicketTTL).Unix(),
+		CreatedAt:         now.Unix(),
+	}
+	if err := s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+		return repository.InsertClaimTicketTx(ctx, tx, t)
+	}); err != nil {
+		return nil, err
+	}
+	return &ClaimTicket{TicketID: t.TicketID, Ticket: token, Purpose: t.Purpose, ExpiresAt: time.Unix(t.ExpiresAt, 0).UTC()}, nil
+}
+
 func (s *SecurityMfaService) issueClaimTicketFor(ctx context.Context, account repository.CredentialAccount, purpose, issuedBy, reason string) (*ClaimTicket, error) {
 	token, err := randB32(32)
 	if err != nil {
@@ -69,6 +114,56 @@ func (s *SecurityMfaService) issueClaimTicketFor(ctx context.Context, account re
 		TicketID: t.TicketID, Ticket: token, Purpose: purpose,
 		Username: account.Username, ExpiresAt: time.Unix(t.ExpiresAt, 0).UTC(),
 	}, nil
+}
+
+// beginInstallEnrollment 为刚创建的首管理员种待登记因子并签发 claim_install 来源的
+// factor_enroll 挑战（无会话绑定）。确认走 ConfirmFactorEnrollment：票与挑战同事务消费。
+func (s *SecurityMfaService) beginInstallEnrollment(ctx context.Context, account repository.CredentialAccount) (*MfaEnrollment, error) {
+	secret, secretB32, err := newTotpSecret()
+	if err != nil {
+		return nil, err
+	}
+	factorID := "tf-" + uuid.NewString()
+	ciphertext, err := s.cipher.seal(factorID, secret)
+	if err != nil {
+		return nil, ErrMfaFactorUnavailable
+	}
+	var out *MfaEnrollment
+	err = s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+		now := s.now().Unix()
+		challenge, token, err := s.issueChallenge(ctx, tx, account.ID, account.Epoch,
+			repository.ChallengePurposeFactorEnroll, "claim_install", "")
+		if err != nil {
+			return err
+		}
+		factor := repository.SecurityTotpFactor{
+			FactorID:         factorID,
+			UserID:           account.ID,
+			AccountEpoch:     account.Epoch,
+			State:            repository.TotpFactorStatePending,
+			SecretCiphertext: ciphertext,
+			KeyVersion:       s.cipher.keyVer,
+			LastAcceptedStep: -1,
+			CreatedAt:        now,
+			ChallengeID:      challenge.ChallengeID,
+		}
+		exp := challenge.ExpiresAt
+		factor.ExpiresAt = &exp
+		if err := repository.InsertTotpFactorTx(ctx, tx, factor); err != nil {
+			return err
+		}
+		out = &MfaEnrollment{
+			ChallengeID:    challenge.ChallengeID,
+			ChallengeToken: token,
+			ExpiresAt:      time.Unix(challenge.ExpiresAt, 0).UTC(),
+			EnrollmentURI:  totpEnrollmentURI(s.issuer, account.Username, secretB32),
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, mapChallengeErr(err)
+	}
+	return out, nil
 }
 
 // RedeemClaimTicket 以「第一因素 + 认领票」进入受控认领：

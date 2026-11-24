@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,6 +19,25 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 	}
 	if req.Username == "" || req.Password == "" {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户名与口令不能为空")
+		return
+	}
+	// 受控安装：持 claim_install 票走原子认领——创建管理员、种待登记因子、
+	// 签发确认挑战；票不直换会话，须 enroll/confirm 持票激活因子后重新登录。
+	if req.ClaimTicket != nil && *req.ClaimTicket != "" {
+		if h.mfa == nil {
+			writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+			return
+		}
+		en, u, err := h.auth.BootstrapWithClaim(c.Request.Context(), req.Username, req.Password, *req.ClaimTicket)
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+		expires := en.ExpiresAt.UTC().Format(time.RFC3339)
+		resp := LoginResponse{Next: ClaimRequired, User: toAPIUser(u), ChallengeId: &en.ChallengeID,
+			ChallengeToken: &en.ChallengeToken, ChallengeExpiresAt: &expires,
+			EnrollmentUri: &en.EnrollmentURI}
+		c.JSON(http.StatusCreated, resp)
 		return
 	}
 	token, user, err := h.auth.Bootstrap(req.Username, req.Password)

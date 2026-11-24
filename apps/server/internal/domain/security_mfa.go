@@ -236,15 +236,20 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challe
 		}
 		// 认领来源挑战要求一次认领成立：提交方必须同时出示绑定同账号同代次的
 		// 在途 claim_admin 票，票在激活事务内消费；缺票/错票统一拒绝。
-		if c.AuthSource == "claim" {
+		if c.AuthSource == "claim" || c.AuthSource == "claim_install" {
 			if claimTicket == "" {
 				return repository.ErrSecurityChallengeRejected
 			}
-			t, terr := repository.TouchClaimTicketTx(ctx, tx, hashChallengeToken(claimTicket), repository.ClaimPurposeAdmin, now)
+			t, terr := repository.TouchClaimTicketTx(ctx, tx, hashChallengeToken(claimTicket), "", now)
 			if terr != nil {
 				return terr
 			}
-			if t.UserID == nil || *t.UserID != c.UserID || t.AccountEpoch != c.AccountEpoch {
+			if t.Purpose != repository.ClaimPurposeAdmin && t.Purpose != repository.ClaimPurposeInstall {
+				return repository.ErrSecurityChallengeRejected
+			}
+			// claim_admin 票绑定账号与代次；claim_install 票绑定安装槽位（无账号），
+			// 其认领对象由挑战行自身裁决。
+			if t.UserID != nil && (*t.UserID != c.UserID || t.AccountEpoch != c.AccountEpoch) {
 				return repository.ErrSecurityChallengeRejected
 			}
 		}
@@ -301,7 +306,7 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challe
 			return err
 		}
 		// 认领票与因子激活同事务消费：票只用一次，失败重试须操作者重新出具。
-		if challenge.AuthSource == "claim" {
+		if challenge.AuthSource == "claim" || challenge.AuthSource == "claim_install" {
 			t, terr := repository.ClaimTicketByTokenHashTx(ctx, tx, hashChallengeToken(claimTicket))
 			if terr != nil {
 				return terr
