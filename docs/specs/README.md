@@ -34,8 +34,8 @@
 
 | FR     | 规格                                                                                         | 主题                           | 状态               |
 | ------ | -------------------------------------------------------------------------------------------- | ------------------------------ | ------------------ |
-| FR-165 | [`0.14.0-web-configurable-runtime-settings.md`](0.14.0-web-configurable-runtime-settings.md) | 运行期策略配置 Web 化（13 项） | 开发中，待用户验收 |
-| FR-166 | [`0.14.0-web-configurable-runtime-settings.md`](0.14.0-web-configurable-runtime-settings.md) | 退役配置清理（`sync_*`）       | 开发中，待用户验收 |
+| FR-173 | [`0.14.0-web-configurable-runtime-settings.md`](0.14.0-web-configurable-runtime-settings.md) | 运行期策略配置 Web 化（13 项） | 开发中，待用户验收 |
+| FR-174 | [`0.14.0-web-configurable-runtime-settings.md`](0.14.0-web-configurable-runtime-settings.md) | 退役配置清理（`sync_*`）       | 开发中，待用户验收 |
 
 > 本窗口只搬「运行期策略」。**启动期固定项**（监听地址 / 数据目录 / TLS / 启用格式 / 连接池）与**凭据密钥**刻意不进 UI——前者改完必须重启或会让实例起不来，后者进 UI 就多一个泄露面。
 
