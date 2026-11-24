@@ -30,35 +30,48 @@ import {
   Code,
   Group,
   Modal,
+  Pagination,
   Progress,
   ScrollArea,
-  SimpleGrid,
   Stack,
   Table,
   Tabs,
   Text,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconAlertTriangle, IconRefresh, IconTrash } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconChartPie,
+  IconDatabase,
+  IconFolderOff,
+  IconHistory,
+  IconRefresh,
+  IconShieldLock,
+  IconTrash,
+  IconUpload,
+} from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { OpsSection } from "../components/ops/OpsKit";
+import { OpsKpiBand, OpsSection } from "../components/ops/OpsKit";
+import type { OpsKpiItem } from "../components/ops/OpsKit";
 import { formatDuration } from "../components/audit/labels";
 import { DestructiveConfirmModal } from "../components/maintenance/DestructiveConfirmModal";
+import { MavenVersionCleanupPanel } from "../components/maintenance/MavenVersionCleanupPanel";
+import { MavenPackageBatchPanel } from "../components/maintenance/MavenPackageBatchPanel";
+import { ReclaimablePanel } from "../components/maintenance/ReclaimablePanel";
+import { RecentCleanupPanel } from "../components/maintenance/RecentCleanupPanel";
+import { UnifiedTrashPanel } from "../components/maintenance/UnifiedTrashPanel";
 import {
   executeCleanup,
   getStorageHealth,
   listCleanTasks,
   listMaintenanceJobs,
-  listTrash,
+  listRepositories,
   previewCleanup,
-  purgeAllTrash,
-  purgeTrash,
-  restoreTrash,
   runMaintenanceJob,
 } from "../api/endpoints";
 import type {
@@ -67,7 +80,6 @@ import type {
   CleanupPreview,
   MaintenanceJob,
   StorageHealth,
-  TrashEntry,
 } from "../api/endpoints";
 import { useAsync } from "../hooks/useAsync";
 import { parseUtc } from "../lib/timeFormat";
@@ -120,71 +132,148 @@ function formatElapsed(startedAt: string | null, finishedAt: string | null): str
 /** 关键事实条：一行固定高度指标，不参与滚动。 */
 function FactsStrip({
   health,
+  refreshKey,
   onCleanup,
+  onRefresh,
+  onViewAllTasks,
 }: {
   health: StorageHealth | null;
+  /** 外部刷新信号，透传给最近活动区块。 */
+  refreshKey: number;
   onCleanup: (k: CleanupKind) => void;
+  onRefresh: () => void;
+  /** 跳转到「清理任务」Tab（最近活动区块的「查看全部」）。 */
+  onViewAllTasks: () => void;
 }) {
   const { t } = useTranslation();
-  const items: { label: string; value: string; kind?: CleanupKind }[] = [
-    { label: t("maintenance.orphanBlobs"), value: `${health?.orphanBlobs ?? 0}` },
-    { label: t("maintenance.quarantined"), value: `${health?.quarantinedBlobs ?? 0}` },
-    { label: t("maintenance.emptyDirs"), value: `${health?.emptyDirs ?? 0}`, kind: "empty_dirs" },
+  // 六项指标各自配一个图标：形状比文字更容易扫读，且窄屏换行后仍能快速定位。
+  //
+  // `id` 必须逐项显式给出：卡片没有语义角色，测试只能靠 testid 定位；早先按
+  // 「有无清理动作」推导 id（`kpi-${kind ?? "total"}`），六个指标里三个都落在
+  // 同一个 `kpi-total` 上，按 id 定位拿到的永远是第一张卡。
+  const items: (OpsKpiItem & { id: string })[] = [
     {
+      id: "orphan-blobs",
+      label: t("maintenance.orphanBlobs"),
+      value: `${health?.orphanBlobs ?? 0}`,
+      icon: <IconDatabase size={20} />,
+      tone: "red",
+      danger: (health?.orphanBlobs ?? 0) > 0,
+      hint: t("maintenance.orphanBlobsHint"),
+    },
+    {
+      id: "quarantined",
+      label: t("maintenance.quarantined"),
+      value: `${health?.quarantinedBlobs ?? 0}`,
+      icon: <IconShieldLock size={20} />,
+      tone: "orange",
+      hint: t("maintenance.quarantinedHint"),
+    },
+    {
+      id: "empty-dirs",
+      label: t("maintenance.emptyDirs"),
+      value: `${health?.emptyDirs ?? 0}`,
+      icon: <IconFolderOff size={20} />,
+      tone: "blue",
+      hint: t("maintenance.emptyDirsHint"),
+    },
+    {
+      id: "pre-restore",
       label: t("maintenance.preRestore"),
       value: `${health?.preRestoreDirs ?? 0}`,
-      kind: "pre_restore",
+      icon: <IconHistory size={20} />,
+      tone: "grape",
+      hint: t("maintenance.preRestoreHint"),
     },
     {
+      id: "stale-uploads",
       label: t("maintenance.staleUploads"),
       value: formatBytes(health?.backupUploadsBytes ?? 0),
-      kind: "stale_uploads",
+      icon: <IconUpload size={20} />,
+      tone: "cyan",
+      hint: t("maintenance.staleUploadsHint"),
     },
-    { label: t("maintenance.total"), value: formatBytes(health?.totalBytes ?? 0) },
+    {
+      id: "total",
+      label: t("maintenance.total"),
+      value: formatBytes(health?.totalBytes ?? 0),
+      icon: <IconChartPie size={20} />,
+      tone: "teal",
+      hint: t("maintenance.totalHint"),
+    },
   ];
   return (
-    <Card withBorder radius="md" padding={density.cardPadding}>
-      <Group justify="space-between" align="flex-end" wrap="wrap" gap="md">
-        <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }} spacing="lg" style={{ flex: 1, minWidth: 0 }}>
-          {items.map((item) => (
-            <Box key={item.label}>
-              <Text size="xs" c="dimmed">
-                {item.label}
-              </Text>
-              <Text size="lg" fw={600}>
-                {item.value}
-              </Text>
-            </Box>
-          ))}
-        </SimpleGrid>
-        <Group gap="xs" wrap="wrap">
-          {CLEANUP_KINDS.map(({ kind, labelKey }) => (
+    <Stack gap="md" style={{ minHeight: 0 }}>
+      <OpsKpiBand
+        label={t("maintenance.healthTitle")}
+        cols={{ base: 2, sm: 3, lg: 6 }}
+        items={items.map((item) => ({ ...item, testId: `kpi-${item.id}` }))}
+      />
+
+      {/* 占比面板紧跟指标带：它读的正是上面那六个数，两者要能连起来看。
+          放在说明卡之前——结论先于操作说明。 */}
+      {health ? <ReclaimablePanel health={health} /> : null}
+
+      {/* 清理动作放在「体检说明」这一块的表头，而不是散在指标卡旁边：
+          它们是"基于体检结论的操作"，归到说明区读起来才是一件事。
+          这块不再用 flex:1 撑满——里面只有一句说明，撑满会留出大片空白。 */}
+      <Card withBorder radius="md" padding={density.cardPadding}>
+        <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Text fw={600} size="sm">
+              {t("maintenance.healthDetailTitle")}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {t("maintenance.healthBodyHint")}
+            </Text>
+          </Stack>
+          <Group gap="xs" wrap="wrap">
+            {CLEANUP_KINDS.map(({ kind, labelKey }) => (
+              <Button
+                key={kind}
+                size="xs"
+                variant="light"
+                leftSection={<IconTrash size={14} />}
+                onClick={() => onCleanup(kind)}
+                data-cleanup-kind={kind}
+              >
+                {t(labelKey)}
+              </Button>
+            ))}
             <Button
-              key={kind}
               size="xs"
-              variant="light"
-              leftSection={<IconTrash size={14} />}
-              onClick={() => onCleanup(kind)}
-              data-cleanup-kind={kind}
+              variant="subtle"
+              leftSection={<IconRefresh size={14} />}
+              onClick={onRefresh}
             >
-              {t(labelKey)}
+              {t("maintenance.refresh")}
             </Button>
-          ))}
+          </Group>
         </Group>
-      </Group>
-    </Card>
+      </Card>
+
+      {/* 最近清理活动垫在最后：体检页在固定视口下原本只用掉约 60% 高度
+          （实测主内容到 y=540、视口 900），下半屏是空的。这块回答的是
+          "上次清是什么时候、清掉了没有"——它和上面的体检结论必须挨着看才有用，
+          而完整的任务历史仍在「清理任务」Tab，这里不复制表格。 */}
+      <RecentCleanupPanel refreshKey={refreshKey} onViewAll={onViewAllTasks} />
+    </Stack>
   );
 }
+
+/** 清理任务每页条数。 */
+const CLEAN_TASK_PAGE_SIZE = 20;
 
 /** 清理任务 Tab：历史表独占剩余高度。 */
 function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
   const { t } = useTranslation();
   const [tasks, setTasks] = useState<CleanTask[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(() => {
-    listCleanTasks(1, 20)
+    listCleanTasks(page, CLEAN_TASK_PAGE_SIZE)
       .then((res) => {
         setTasks(res.items ?? []);
         setTotal(res.total ?? 0);
@@ -194,17 +283,30 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
       // 定时器随之停掉，进行中的任务就此从界面消失——一次网络抖动看起来就像"任务丢了"。
       // 保留上次数据并置一条失败提示，下一轮成功即自动恢复。
       .catch(() => setLoadFailed(true));
-  }, []);
+  }, [page]);
 
   useEffect(load, [load, refreshKey]);
 
   // 仅在有进行中任务时轮询，终态立即停止。
-  const hasRunning = tasks.some((task) => task.Status === "running" || task.Status === "queued");
+  //
+  // 分页带来的坑：`hasRunning` 只反映**当前页**。任务按创建时间倒序排，进行中的任务
+  // 通常就在第 1 页，但用户翻到第 2 页后第 1 页的任务就从 `tasks` 里消失了——若只据
+  // 当前页判断，轮询会在有任务仍在跑时停掉，而那些任务再也刷新不出来。
+  // 因此「是否该轮询」的判据放宽为「**任意**任务存在即轮询」：多轮询几次的代价远小于
+  // "任务从界面上消失"。终态页（全部 succeeded/failed）仍会停止，不会空转。
+  const pageHasRunning = tasks.some(
+    (task) => task.Status === "running" || task.Status === "queued",
+  );
+  // 不在第 1 页时假装还有可能在进行中：第 1 页才是新任务的落点，翻页后无法从本地
+  // 数据判断"外面还有没有在跑的"，宁可继续轮询（1.5s 一次、只查一页，代价可控）。
+  const mayHaveRunning = pageHasRunning || page > 1;
   useEffect(() => {
-    if (!hasRunning) return;
+    if (!mayHaveRunning) return;
     const timer = window.setInterval(load, 1500);
     return () => window.clearInterval(timer);
-  }, [hasRunning, load]);
+  }, [mayHaveRunning, load]);
+
+  const totalPages = Math.max(1, Math.ceil(total / CLEAN_TASK_PAGE_SIZE));
 
   return (
     <OpsSection
@@ -221,9 +323,20 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
       bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
       bodyPadding={0}
       actions={
-        <Button size="xs" variant="subtle" leftSection={<IconRefresh size={14} />} onClick={load}>
-          {t("maintenance.refresh")}
-        </Button>
+        <Group gap="xs">
+          {totalPages > 1 ? (
+            <Pagination
+              value={page}
+              onChange={setPage}
+              total={totalPages}
+              size="sm"
+              data-testid="clean-tasks-pagination"
+            />
+          ) : null}
+          <Button size="xs" variant="subtle" leftSection={<IconRefresh size={14} />} onClick={load}>
+            {t("maintenance.refresh")}
+          </Button>
+        </Group>
       }
     >
       {loadFailed ? (
@@ -309,230 +422,6 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
         </Table>
       )}
     </OpsSection>
-  );
-}
-
-/** 回收站 Tab：表格独占剩余高度，恢复/彻底删除走行内按钮 + 模态框确认。 */
-function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
-  const { t } = useTranslation();
-  const [entries, setEntries] = useState<TrashEntry[]>([]);
-  const [stats, setStats] = useState({ entries: 0, bytes: 0 });
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [pendingPurge, setPendingPurge] = useState<{ ids: number[]; all: boolean } | null>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
-  // 彻底删除请求在途：用于禁用确认按钮，避免连点发出多次不可逆请求。
-  const [purging, setPurging] = useState(false);
-
-  const load = useCallback(() => {
-    listTrash(1, 50)
-      .then((res) => {
-        setEntries(res.items ?? []);
-        setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
-        setSelected(new Set());
-        setLoadFailed(false);
-      })
-      // 与清理任务 Tab 同一口径：失败保留上次数据，只提示不抹掉。
-      // 列表被清空会连带让"清空回收站"按钮变成禁用——一次网络抖动看起来像回收站真的空了。
-      .catch(() => setLoadFailed(true));
-  }, []);
-
-  useEffect(load, [load, refreshKey]);
-
-  const toggle = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  // 恢复只做一次点击：反向操作加三道关只会让人更不敢用。
-  const handleRestore = (ids: number[]) => {
-    restoreTrash(ids)
-      .then((res) => {
-        if (res.conflicts && res.conflicts.length > 0) {
-          notifications.show({
-            color: "yellow",
-            title: t("maintenance.restoreConflictsTitle"),
-            message: res.conflicts.map((c) => `${c.originalPath}：${c.reason}`).join("\n"),
-          });
-        }
-        if (res.restored > 0) {
-          notifications.show({
-            color: "green",
-            message: t("maintenance.restored", { count: res.restored }),
-          });
-        }
-        load();
-        onChanged();
-      })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }));
-  };
-
-  const runPendingPurge = () => {
-    if (!pendingPurge || purging) return;
-    setPurging(true);
-    const action = pendingPurge.all ? purgeAllTrash() : purgeTrash(pendingPurge.ids);
-    action
-      .then(() => {
-        notifications.show({ color: "green", message: t("maintenance.purged") });
-        setPendingPurge(null);
-        load();
-        onChanged();
-      })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }))
-      .finally(() => setPurging(false));
-  };
-
-  return (
-    <>
-      <OpsSection
-        title={t("maintenance.trashTitle")}
-        meta={t("maintenance.trashUsage", {
-          count: stats.entries,
-          bytes: formatBytes(stats.bytes),
-        })}
-        testId="trash-section"
-        style={{
-          flex: 1,
-          minHeight: 150,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-        bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
-        bodyPadding={0}
-        actions={
-          <Group gap="xs">
-            <Button
-              size="xs"
-              variant="default"
-              disabled={selected.size === 0}
-              onClick={() => handleRestore([...selected])}
-            >
-              {t("maintenance.restoreSelected")}
-            </Button>
-            <Button
-              size="xs"
-              color="red"
-              variant="light"
-              disabled={selected.size === 0}
-              onClick={() => setPendingPurge({ ids: [...selected], all: false })}
-            >
-              {t("maintenance.purgeSelected")}
-            </Button>
-            <Button
-              size="xs"
-              color="red"
-              variant="subtle"
-              disabled={stats.entries === 0}
-              onClick={() => setPendingPurge({ ids: [], all: true })}
-            >
-              {t("maintenance.purgeAll")}
-            </Button>
-          </Group>
-        }
-      >
-        {loadFailed ? (
-          <Box px="md" pt="sm">
-            <Alert
-              color="yellow"
-              variant="light"
-              icon={<IconAlertTriangle size={16} />}
-              title={t("common.refreshFailedTitle")}
-            >
-              {t("maintenance.loadFailedHint")}
-            </Alert>
-          </Box>
-        ) : null}
-        {entries.length === 0 ? (
-          <Box p="xl">
-            <Stack gap={4}>
-              <Text size="sm" c="dimmed">
-                {t("maintenance.trashEmpty")}
-              </Text>
-              <Text size="xs" c="dimmed">
-                {t("maintenance.trashHint")}
-              </Text>
-            </Stack>
-          </Box>
-        ) : (
-          <Table striped verticalSpacing={6} stickyHeader miw={720}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th style={{ width: 36 }} />
-                <Table.Th>{t("maintenance.colKind")}</Table.Th>
-                <Table.Th>{t("maintenance.colPath")}</Table.Th>
-                <Table.Th>{t("maintenance.colSize")}</Table.Th>
-                <Table.Th>{t("maintenance.colCreated")}</Table.Th>
-                <Table.Th>{t("maintenance.colRetention")}</Table.Th>
-                <Table.Th>{t("maintenance.colActions")}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {entries.map((entry) => (
-                <Table.Tr key={entry.ID} data-trash-id={entry.ID}>
-                  <Table.Td>
-                    <Checkbox
-                      aria-label={entry.OriginalPath}
-                      checked={selected.has(entry.ID)}
-                      onChange={() => toggle(entry.ID)}
-                    />
-                  </Table.Td>
-                  <Table.Td>{entry.Kind}</Table.Td>
-                  <Table.Td>
-                    <Code style={{ wordBreak: "break-all" }}>{entry.OriginalPath}</Code>
-                  </Table.Td>
-                  <Table.Td>{formatBytes(entry.Bytes)}</Table.Td>
-                  <Table.Td>{formatStamp(entry.CreatedAt)}</Table.Td>
-                  <Table.Td>
-                    {/* 后端未返回保留期，前端不猜：保留天数只存在于服务端配置
-                        `JIAN_TRASH_RETENTION_DAYS`，而 GET /maintenance/trash 既不回保留天数、
-                        也不回过期时间；照默认值硬编码 7 天，在运维把它改成别的天数或改成 0
-                        （不自动清理）时就会直接说错话。接口补出该字段前一律显示「—」。 */}
-                    <Text size="sm" c="dimmed">
-                      —
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Group gap={4}>
-                      <Button
-                        size="compact-xs"
-                        variant="default"
-                        onClick={() => handleRestore([entry.ID])}
-                      >
-                        {t("maintenance.restore")}
-                      </Button>
-                      <Button
-                        size="compact-xs"
-                        color="red"
-                        variant="subtle"
-                        onClick={() => setPendingPurge({ ids: [entry.ID], all: false })}
-                      >
-                        {t("maintenance.purge")}
-                      </Button>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </OpsSection>
-      <DestructiveConfirmModal
-        opened={pendingPurge !== null}
-        title={pendingPurge?.all ? t("maintenance.purgeAllTitle") : t("maintenance.purgeTitle")}
-        message={
-          pendingPurge?.all
-            ? t("maintenance.purgeAllMessage", { count: stats.entries })
-            : t("maintenance.purgeMessage", { count: pendingPurge?.ids.length ?? 0 })
-        }
-        onConfirm={runPendingPurge}
-        onClose={() => setPendingPurge(null)}
-        pending={purging}
-      />
-    </>
   );
 }
 
@@ -768,8 +657,38 @@ export function MaintenancePage() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   // Tab 走查询参数（与迁移与备份页 ?tab= 同约定），直链与刷新后保持位置。
+  //
+  // 兼容旧深链接：`?tab=asset-trash` 是合并前的独立 Tab，现已并入 `trash`。
+  // 直接落到 health 会让收藏过该链接的人以为功能没了，因此映射过去。
   const raw = params.get("tab");
-  const tab = raw === "tasks" || raw === "trash" || raw === "jobs" ? raw : "health";
+  const normalized = raw === "asset-trash" ? "trash" : raw;
+  const tab =
+    normalized === "tasks" ||
+    normalized === "trash" ||
+    normalized === "jobs" ||
+    normalized === "maven-versions" ||
+    normalized === "maven-packages"
+      ? normalized
+      : "health";
+
+  // Maven 版本清理面板需要可选的 hosted 仓库清单。
+  // 只取 maven + hosted：版本清理是写动作，proxy/group 一律不支持（后端会 409），
+  // 把它们列进下拉框只会让用户点出一个必然失败的选项。
+  const [mavenRepos, setMavenRepos] = useState<{ name: string }[]>([]);
+  useEffect(() => {
+    listRepositories({ page: 1, page_size: 100 })
+      .then((res) => {
+        const items = (res.items ?? []) as { name: string; format?: string; type?: string }[];
+        setMavenRepos(
+          items
+            .filter((r) => r.format === "maven" && r.type === "hosted")
+            .map((r) => ({ name: r.name })),
+        );
+      })
+      // 失败不弹错：这只是下拉候选，用户仍可手动输入坐标；
+      // 弹一条红字会让"页面进不去"看起来像功能坏了。
+      .catch(() => setMavenRepos([]));
+  }, []);
 
   const changeTab = (value: string | null) => {
     const next = new URLSearchParams(params);
@@ -833,6 +752,8 @@ export function MaintenancePage() {
         <Tabs.List style={{ flexShrink: 0 }}>
           <Tabs.Tab value="health">{t("maintenance.tabHealth")}</Tabs.Tab>
           <Tabs.Tab value="trash">{t("maintenance.tabTrash")}</Tabs.Tab>
+          <Tabs.Tab value="maven-packages">{t("maintenance.tabMavenPackages")}</Tabs.Tab>
+          <Tabs.Tab value="maven-versions">{t("maintenance.tabMavenVersions")}</Tabs.Tab>
           <Tabs.Tab value="tasks">{t("maintenance.tabTasks")}</Tabs.Tab>
           <Tabs.Tab value="jobs">{t("maintenance.tabJobs")}</Tabs.Tab>
         </Tabs.List>
@@ -842,48 +763,24 @@ export function MaintenancePage() {
           pt="md"
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}
         >
-          <Box style={{ flexShrink: 0 }}>
-            <AsyncBoundary state={healthState}>
-              {(health: StorageHealth) => (
-                <Stack gap="xs">
-                  {health.partialError ? (
-                    <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={16} />}>
-                      {t("maintenance.partialError", { reason: health.partialError })}
-                    </Alert>
-                  ) : null}
-                  <FactsStrip health={health} onCleanup={openPreview} />
-                </Stack>
-              )}
-            </AsyncBoundary>
-          </Box>
-          <OpsSection
-            title={t("maintenance.healthDetailTitle")}
-            meta={t("maintenance.healthHint")}
-            testId="health-section"
-            style={{
-              flex: 1,
-              minHeight: 150,
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-            bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
-            bodyPadding="md"
-            actions={
-              <Button
-                size="xs"
-                variant="subtle"
-                leftSection={<IconRefresh size={14} />}
-                onClick={healthState.reload}
-              >
-                {t("maintenance.refresh")}
-              </Button>
-            }
-          >
-            <Text size="sm" c="dimmed">
-              {t("maintenance.healthBodyHint")}
-            </Text>
-          </OpsSection>
+          <AsyncBoundary state={healthState}>
+            {(health: StorageHealth) => (
+              <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
+                {health.partialError ? (
+                  <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={16} />}>
+                    {t("maintenance.partialError", { reason: health.partialError })}
+                  </Alert>
+                ) : null}
+                <FactsStrip
+                  health={health}
+                  refreshKey={refreshKey}
+                  onCleanup={openPreview}
+                  onRefresh={healthState.reload}
+                  onViewAllTasks={() => changeTab("tasks")}
+                />
+              </Stack>
+            )}
+          </AsyncBoundary>
         </Tabs.Panel>
 
         <Tabs.Panel
@@ -891,7 +788,25 @@ export function MaintenancePage() {
           pt="md"
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
-          <TrashTab refreshKey={refreshKey} onChanged={bump} />
+          {/* 一个入口、两个分区：制品（删除的版本）与存储清理（作业扫出的垃圾）。
+              早先它们是两个并列 Tab，用户删完东西不知道该去哪个找。 */}
+          <UnifiedTrashPanel refreshKey={refreshKey} onChanged={bump} />
+        </Tabs.Panel>
+
+        <Tabs.Panel
+          value="maven-packages"
+          pt="md"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <MavenPackageBatchPanel repositories={mavenRepos} onTrashed={bump} />
+        </Tabs.Panel>
+
+        <Tabs.Panel
+          value="maven-versions"
+          pt="md"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <MavenVersionCleanupPanel repositories={mavenRepos} onTrashed={bump} />
         </Tabs.Panel>
 
         <Tabs.Panel

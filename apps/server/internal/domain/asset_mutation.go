@@ -139,6 +139,29 @@ func (c *AssetMutationCoordinator) ApplyWithOperationIDAndHook(operationID strin
 	return c.applyLockedWithEnvelopeAndHook(items, nil, operationID, hook)
 }
 
+// ApplyWithOperationIDAndHookKeepBlobs 与 ApplyWithOperationIDAndHook 相同，
+// 但**跳过孤立 blob 的隔离搬移**：删除的资产所引用的 blob 原样留在活动目录。
+//
+// 唯一的使用场景是软删除（资产回收站）：软删除的定义就是"元数据消失、内容保留、
+// 可随时恢复"。走常规路径会在删除前判定引用——那一刻回收站记录尚未写入，
+// 于是 blob 被判成孤立并搬进隔离区，恢复时拿到的是一条指向隔离区文件的资产行。
+//
+// 为什么用独立方法而不是给 Item 加标记位：标记位会被所有既有调用点传播、
+// 也需要在事务中断恢复路径里一并判断；而"保留 blob"是整体语义，
+// 不可能只对其中一条 item 生效。独立入口把这件事收在一个调用点上。
+//
+// 安全性：blob 不会被永久泄漏——回收站条目本身参与 CountBlobReferences 计数
+// （见 AssetMutationRepo.CountBlobReferences），条目被 purged 后计数归零，
+// 随后的 RemoveIfUnreferenced / 定时 blob-gc 会正常回收。
+func (c *AssetMutationCoordinator) ApplyWithOperationIDAndHookKeepBlobs(operationID string, items []repository.AssetMutationItem, hook repository.MutationCompletionHook) (string, error) {
+	if len(items) == 0 {
+		return operationID, fmt.Errorf("%w: 资产操作不能为空", ErrValidation)
+	}
+	c.gate.Lock()
+	defer c.gate.Unlock()
+	return c.applyLockedWithEnvelopeAndHookKeepBlobs(items, nil, operationID, hook)
+}
+
 // ApplyWithOutbox 在资产完成事务中同时写入不可拆分的复制 operation outbox。
 // 调用方应提供完整、已排序的 operation items；空清单不能建立复制记录。
 func (c *AssetMutationCoordinator) ApplyWithOutbox(items []repository.AssetMutationItem, envelope repository.OperationEnvelope) error {
@@ -184,6 +207,21 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndID(items []reposito
 }
 
 func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []repository.AssetMutationItem, envelope *repository.OperationEnvelope, operationID string, hook repository.MutationCompletionHook) (string, error) {
+	return c.applyLockedInternal(items, envelope, operationID, hook, true)
+}
+
+// applyLockedWithEnvelopeAndHookKeepBlobs 是保留 blob 的提交路径，见
+// ApplyWithOperationIDAndHookKeepBlobs 的说明。除"不做孤立隔离"外与前者完全一致：
+// 同样走 intent 前置、快照、完成事务与失败回滚，不另建一套事务机制。
+func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHookKeepBlobs(items []repository.AssetMutationItem, envelope *repository.OperationEnvelope, operationID string, hook repository.MutationCompletionHook) (string, error) {
+	return c.applyLockedInternal(items, envelope, operationID, hook, false)
+}
+
+// applyLockedInternal 是两条提交路径的共同实现。
+//
+// quarantineBlobs 为 true 时按既有语义把"删除后不再被引用"的 blob 搬进隔离区，
+// 由完成后的快照清理统一回收；为 false 时完全跳过这一步，blob 保持在活动目录。
+func (c *AssetMutationCoordinator) applyLockedInternal(items []repository.AssetMutationItem, envelope *repository.OperationEnvelope, operationID string, hook repository.MutationCompletionHook, quarantineBlobs bool) (string, error) {
 	id := operationID
 	if id == "" {
 		id = newOperationID()
@@ -199,9 +237,13 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []reposi
 	if beginErr != nil {
 		return id, beginErr
 	}
-	entries, err := c.stageUnreferenced(id, items)
-	if err != nil {
-		return id, c.rollbackUnrecordedStaging(id, entries, err)
+	var entries []blobstore.QuarantineEntry
+	if quarantineBlobs {
+		var err error
+		entries, err = c.stageUnreferenced(id, items)
+		if err != nil {
+			return id, c.rollbackUnrecordedStaging(id, entries, err)
+		}
 	}
 	if err := c.mutations.MarkStaged(id, quarantineRecords(entries)); err != nil {
 		if errors.Is(err, repository.ErrAssetMutationTransition) {

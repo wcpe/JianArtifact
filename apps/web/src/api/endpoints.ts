@@ -1951,6 +1951,216 @@ export function purgeAllTrash(): Promise<{ purged: number; freedBytes: number }>
   return request("/maintenance/trash/purge-all", { method: "POST" });
 }
 
+// ===== 资产回收站（Maven 版本级软删除）=====
+//
+// 与上面「存储清理回收站」是**同一套保留期、同一个清理作业**下的两类条目：
+// 那些记磁盘路径（靠 rename 恢复），这些记 asset 元数据快照（靠重建行恢复）。
+// 前端把它们分两个 Tab 呈现，是因为恢复语义不同、条目字段不同；
+// 但用户只需要理解一件事：删掉的东西还在，到期才真没。
+
+/** 资产回收站条目：被软删除的 asset 完整快照。 */
+export type AssetTrashEntry = {
+  id: number;
+  repositoryId: number;
+  repositoryName?: string;
+  path: string;
+  blobHash?: string;
+  size: number;
+  contentType?: string;
+  sha1?: string;
+  md5?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  scope?: "version" | "snapshot_build" | "artifact";
+  actor?: string;
+  operationId?: string;
+  status: "staged" | "restored" | "purged";
+  trashedAt: string;
+  resolvedAt?: string;
+};
+
+/** 回收站解析动作里被保护性跳过的条目。 */
+export type AssetTrashConflict = { id: number; path: string; reason: string };
+
+/** 列出资产回收站条目与占用统计。 */
+export function listAssetTrash(
+  page = 1,
+  pageSize = 20,
+): Promise<{
+  items: AssetTrashEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  stats?: { entries?: number; bytes?: number };
+}> {
+  return request("/maintenance/asset-trash", { query: { page, pageSize } });
+}
+
+/** 从资产回收站恢复（目标已存在时保护性跳过并回 conflicts）。 */
+export function restoreAssetTrash(ids: number[]): Promise<{
+  restored: number;
+  conflicts?: AssetTrashConflict[];
+  missing?: AssetTrashConflict[];
+}> {
+  return request("/maintenance/asset-trash/restore", { method: "POST", body: { ids } });
+}
+
+/** 彻底清理资产回收站条目（**不可逆**，释放 blob）。 */
+export function purgeAssetTrash(ids: number[]): Promise<{ purged: number; freedBytes: number }> {
+  return request("/maintenance/asset-trash/purge", { method: "POST", body: { ids } });
+}
+
+/** Maven 版本清理计划中的单个文件。 */
+export type MavenVersionFile = {
+  path: string;
+  size: number;
+  category: "primary" | "classifier" | "checksum" | "metadata" | "other";
+  blobHash?: string;
+  checksumType?: string;
+  buildId?: string;
+  updatedAt?: string;
+};
+
+/** SNAPSHOT 历史构建聚合。 */
+export type MavenSnapshotBuild = { buildId: string; fileCount: number; bytes: number };
+
+/** Maven 版本清理计划（预览结果）。 */
+export type MavenVersionPlan = {
+  coordinate: { groupId: string; artifactId: string; version: string; buildId?: string };
+  repository: string;
+  directory: string;
+  files: MavenVersionFile[];
+  categories?: { category: string; fileCount: number; bytes: number }[];
+  snapshotBuilds?: MavenSnapshotBuild[];
+  literalSnapshotFiles?: number;
+  totalFiles: number;
+  totalBytes: number;
+  exists: boolean;
+};
+
+/** 预览 Maven 版本的清理计划（只读，不产生任何变更）。 */
+export function planMavenVersion(
+  repo: string,
+  coord: { groupId: string; artifactId: string; version: string; buildId?: string },
+): Promise<MavenVersionPlan> {
+  return request(`/repositories/${encodeURIComponent(repo)}/maven-versions/plan`, {
+    query: {
+      groupId: coord.groupId,
+      artifactId: coord.artifactId,
+      version: coord.version,
+      ...(coord.buildId ? { buildId: coord.buildId } : {}),
+    },
+  });
+}
+
+/** 把 Maven 版本移入资产回收站（软删除，可恢复）。 */
+export function trashMavenVersion(
+  repo: string,
+  body: {
+    groupId: string;
+    artifactId: string;
+    version: string;
+    buildId?: string;
+    paths?: string[];
+    overrideReason: string;
+  },
+): Promise<{
+  operationId: string;
+  repository: string;
+  trashed: number;
+  batches: number;
+  bytes: number;
+  archivePath: string;
+}> {
+  return request(`/repositories/${encodeURIComponent(repo)}/maven-versions/trash`, {
+    method: "POST",
+    body,
+  });
+}
+
+// ===== Maven 包名搜索与批量清理 =====
+//
+// 入口是"包"而不是"目录"：运维脑子里想的是 com.tbao:tbaoolib，
+// 既有的资产浏览只能逐层进目录、逐个版本删，清理几十个版本要点几十次。
+
+/** 搜索结果中的一个版本。 */
+export type MavenPackageVersion = {
+  coordinate: { groupId: string; artifactId: string; version: string; buildId?: string };
+  versionDir: string;
+  fileCount: number;
+  bytes: number;
+  updatedAt: string;
+  createdAt: string;
+  literalSnapshotFiles: number;
+  timestampBuilds: number;
+  /** 疑似幽灵快照：有字面 SNAPSHOT 文件但没有任何时间戳构建。 */
+  suspect: boolean;
+};
+
+/** 包名搜索结果。 */
+export type MavenPackageSearchResult = {
+  query: Record<string, unknown>;
+  repository: string;
+  artifactDirs?: string[];
+  versions: MavenPackageVersion[];
+  totalVersions: number;
+  matchedBytes: number;
+  /** 结果被 limit 截断，应收窄条件。 */
+  truncated: boolean;
+};
+
+/** 按 Maven 包名搜索版本（只读）。 */
+export function searchMavenPackageVersions(
+  repo: string,
+  params: {
+    groupId?: string;
+    artifactId?: string;
+    version?: string;
+    snapshotOnly?: boolean;
+    updatedBefore?: string;
+    minBytes?: number;
+    maxBytes?: number;
+    limit?: number;
+  },
+): Promise<MavenPackageSearchResult> {
+  const query: Record<string, string | number | undefined> = {
+    groupId: params.groupId,
+    artifactId: params.artifactId,
+    version: params.version,
+    updatedBefore: params.updatedBefore,
+    minBytes: params.minBytes,
+    maxBytes: params.maxBytes,
+    limit: params.limit,
+  };
+  // 布尔按本项目既有约定用字符串表达（见 deep 校验参数），
+  // 且只在为 true 时传：false 与缺省同义，传出去只会让 URL 变长。
+  if (params.snapshotOnly) query.snapshotOnly = "true";
+  return request(`/repositories/${encodeURIComponent(repo)}/maven-packages/search`, { query });
+}
+
+/** 批量把 Maven 版本移入回收站（部分成功是正常结果）。 */
+export function trashMavenVersionsBatch(
+  repo: string,
+  body: {
+    versions: { groupId: string; artifactId: string; version: string; buildId?: string }[];
+    overrideReason: string;
+  },
+): Promise<{
+  operationId: string;
+  trashedVersions: number;
+  trashedFiles: number;
+  freedBytes: number;
+  failures?: {
+    coordinate: { groupId: string; artifactId: string; version: string };
+    reason: string;
+  }[];
+}> {
+  return request(`/repositories/${encodeURIComponent(repo)}/maven-versions/trash-batch`, {
+    method: "POST",
+    body,
+  });
+}
+
 /** 维护作业清单。
  *
  * 注意字段名是 `jobs` 而不是 `items`：本端点沿用后端既有形状（`MaintenanceJobList`），

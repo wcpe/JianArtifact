@@ -216,7 +216,14 @@ type AssetService struct {
 	// upstreamHealth 记录上游健康采样；nil 表示不采样。
 	// 与 health（内存态「此刻」）并存：两者一个回答现在通不通，一个回答过去怎么通。
 	upstreamHealth *UpstreamHealthService
+	// assetTrash 是资产回收站（Maven 版本级软删除）。
+	// nil 表示未装配：此时版本级删除退化为不可用（返回明确错误），
+	// 而不是静默改成硬删除——那会让用户以为东西还能恢复。
+	assetTrash *repository.AssetTrashRepo
 }
+
+// SetAssetTrashRepo 注入资产回收站仓储。
+func (s *AssetService) SetAssetTrashRepo(r *repository.AssetTrashRepo) { s.assetTrash = r }
 
 // NewAssetService 构造 AssetService。upstream 供 proxy 回源使用（hosted-only 部署可传 nil）。
 func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, blobs *blobstore.Store, up *upstream.Client) *AssetService {

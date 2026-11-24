@@ -494,6 +494,15 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusBadRequest, "invalid_credential_scope", domainErrMessage(err, "机器凭据用途或作用域不允许"))
 	case errors.Is(err, domain.ErrCredentialVersionConflict):
 		write(http.StatusConflict, "credential_version_conflict", domainErrMessage(err, "账号或口令状态已变更"))
+	// Maven 版本清理：目标版本目录下没有任何文件。这是「你要删的东西不存在」，
+	// 属 404 而非 400——参数本身没错，是目标为空。
+	case errors.Is(err, domain.ErrMavenVersionEmpty):
+		write(http.StatusNotFound, "not_found", err.Error())
+	// 批量清理未选中任何版本：请求体为空，属参数校验失败。
+	// 必须在 ErrValidation 之前单独列出以获得更精确的 code，
+	// 否则会落到下面 ErrValidation 分支给出一句泛化的「参数校验失败」。
+	case errors.Is(err, domain.ErrMavenBatchEmpty):
+		write(http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, domain.ErrValidation):
 		write(http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, domain.ErrUpstream):

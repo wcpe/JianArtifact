@@ -196,3 +196,37 @@ func TestAnonymousRepositoryListHidesInternalDetail(t *testing.T) {
 		t.Fatalf("管理员应看到原始错误，实际 message = %q", body.Error.Message)
 	}
 }
+
+// TestWriteDomainErrMavenEmptySentinels 钉住两个 Maven 清理相关哨兵的错误映射。
+//
+// 起因是一次真实漏判：`trash-batch` 传空 versions 时返回 500「内部错误」，
+// 因为 ErrMavenBatchEmpty 没有映射分支、落进了兜底。它不是服务端故障，
+// 是调用方漏传参数——500 会让人去查服务端日志，而正确处置是修正请求。
+//
+// 两个哨兵语义不同，必须分别映射，不能合并：
+//   - ErrMavenBatchEmpty：**请求为空** → 400（参数校验失败）；
+//   - ErrMavenVersionEmpty：**目标版本无文件** → 404（要删的东西不存在）。
+func TestWriteDomainErrMavenEmptySentinels(t *testing.T) {
+	t.Parallel()
+	admin := &auth.Principal{UserID: 1, Role: "admin", Kind: auth.KindSession}
+	cases := []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"批量清理未选中版本", domain.ErrMavenBatchEmpty, http.StatusBadRequest},
+		{"目标版本无制品", domain.ErrMavenVersionEmpty, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := callDomainErrWriter(t, admin, c.err, true)
+			if rec.Code != c.wantCode {
+				t.Fatalf("应返回 %d，得 %d：%s", c.wantCode, rec.Code, rec.Body.String())
+			}
+			// 不能落到兜底的「内部错误」：那会把参数问题说成服务端故障。
+			if strings.Contains(rec.Body.String(), "内部错误") {
+				t.Fatalf("不得映射成内部错误：%s", rec.Body.String())
+			}
+		})
+	}
+}

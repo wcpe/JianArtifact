@@ -6,9 +6,19 @@
 // 成为真正的门，而不是提示文字。
 import { Button, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-/** 确认词：中文动作词，与界面语言一致，避免用英文 "DELETE" 造成割裂。 */
-export const DESTRUCTIVE_CONFIRM_WORD = "清理";
+/**
+ * 确认词的 i18n 键：**按当前界面语言求值**，不能是模块级常量。
+ *
+ * 早先它是 `const DESTRUCTIVE_CONFIRM_WORD = "清理"`，切到英文后提示语与占位符
+ * 仍是中文，用户得对着英文界面输入中文才能确认——而这道防线的作用是"让人有意识地
+ * 停一下"，不是考语言。中文侧取值仍是「清理」，既有测试的语义不变。
+ *
+ * 导出的是**键名而非文案**：任何在渲染期取文案的地方都必须走 `useTranslation`，
+ * 把文案固化到常量会让它重新脱离语言切换。
+ */
+export const CONFIRM_PHRASE_KEY = "maintenance.confirmPhrase";
 
 export interface DestructiveConfirmModalProps {
   opened: boolean;
@@ -17,6 +27,10 @@ export interface DestructiveConfirmModalProps {
   message: string;
   /** 是否需要输入确认词才可提交（不可逆操作用 true）。 */
   requirePhrase?: boolean;
+  /**
+   * 确认按钮文案。省略时**复用确认词本身**（"清理" / "Purge"），
+   * 与既有行为一致；调用方不要再传固定字符串，否则该按钮会脱离语言切换。
+   */
   confirmLabel?: string;
   cancelLabel?: string;
   /**
@@ -36,20 +50,24 @@ export function DestructiveConfirmModal({
   title,
   message,
   requirePhrase = true,
-  confirmLabel = DESTRUCTIVE_CONFIRM_WORD,
-  cancelLabel = "取消",
+  confirmLabel,
+  cancelLabel,
   pending = false,
   onConfirm,
   onClose,
 }: DestructiveConfirmModalProps) {
+  const { t } = useTranslation();
   const [typed, setTyped] = useState("");
+  const phrase = t(CONFIRM_PHRASE_KEY);
 
   // 每次打开都重置：否则上次残留的输入会让下一次确认直接通过。
   useEffect(() => {
     if (opened) setTyped("");
   }, [opened]);
 
-  const phraseOk = !requirePhrase || typed.trim() === DESTRUCTIVE_CONFIRM_WORD;
+  // 大小写与首尾空白都归一：英文确认词是单词，用户打成 "delete" / "Delete " 都该放行
+  // ——这道门要挡的是"没意识到自己在做什么"，不是拼写。中文侧无大小写，行为不变。
+  const phraseOk = !requirePhrase || typed.trim().toLowerCase() === phrase.trim().toLowerCase();
 
   return (
     <Modal opened={opened} onClose={onClose} title={title} centered>
@@ -60,7 +78,7 @@ export function DestructiveConfirmModal({
         {requirePhrase ? (
           <>
             <Text size="sm" fw={500}>
-              请输入「{DESTRUCTIVE_CONFIRM_WORD}」以确认
+              {t("maintenance.confirmPhrasePrompt", { phrase })}
             </Text>
             <TextInput
               // 打开即可输入：确认词是这道防线的唯一入口，还要先点一下输入框才能打字
@@ -71,8 +89,8 @@ export function DestructiveConfirmModal({
               // `autoFocus`；`data-autofocus` 才是它认的初始焦点标记。
               autoFocus
               data-autofocus
-              aria-label="确认词"
-              placeholder={DESTRUCTIVE_CONFIRM_WORD}
+              aria-label={t("maintenance.confirmPhraseLabel")}
+              placeholder={phrase}
               value={typed}
               onChange={(e) => setTyped(e.currentTarget.value)}
               data-confirm-phrase-ok={phraseOk ? "true" : "false"}
@@ -81,7 +99,7 @@ export function DestructiveConfirmModal({
         ) : null}
         <Group justify="flex-end" gap="xs">
           <Button variant="default" onClick={onClose} disabled={pending}>
-            {cancelLabel}
+            {cancelLabel ?? t("common.cancel")}
           </Button>
           <Button
             color="red"
@@ -90,7 +108,7 @@ export function DestructiveConfirmModal({
             onClick={onConfirm}
             data-confirm-submit
           >
-            {confirmLabel}
+            {confirmLabel ?? phrase}
           </Button>
         </Group>
       </Stack>

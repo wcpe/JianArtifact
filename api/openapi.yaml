@@ -2321,6 +2321,359 @@ paths:
           $ref: "#/components/responses/AssetOperationConflict"
         "500":
           $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/repositories/{name}/maven-versions/plan:
+    get:
+      operationId: planMavenVersionCleanup
+      summary: 预览 Maven 版本的清理计划（仅全局管理员）
+      description: |
+        按 group:artifactId:version 展开该版本目录下的**全部**文件（主档 / classifier /
+        校验和 / metadata / SNAPSHOT 历史构建），按类别汇总后返回，供删除前核对。
+
+        展开按目录前缀进行而非文件名模式匹配：命名变体无法穷举，前缀才是可靠边界，
+        因此同一版本下的任何新增命名都会被自动纳入。
+
+        `buildId` 仅对 SNAPSHOT 版本有效，指定后表示只清理该次时间戳构建。
+        该端点只读，不产生任何变更。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+        - name: groupId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Maven groupId（如 com.example）
+        - name: artifactId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: buildId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 仅 SNAPSHOT 版本有效，形如 20260317.215705-3；留空表示整个版本
+      responses:
+        "200":
+          description: 清理计划
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MavenVersionPlan"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+        "404":
+          $ref: "#/components/responses/AssetOperationNotFound"
+        "409":
+          $ref: "#/components/responses/AssetOperationConflict"
+        "500":
+          $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/repositories/{name}/maven-versions/trash:
+    post:
+      operationId: trashMavenVersion
+      summary: 把 Maven 版本移入资产回收站（仅全局管理员）
+      description: |
+        软删除：把该版本的文件移出 asset 视图并写入资产回收站，**保留 blob**，
+        因此可随时通过回收站恢复。彻底清理（释放 blob）是回收站的独立动作。
+
+        可按批跨越 500 条上限：每批自身是完整原子操作，批间不保证原子性。
+        失败时已完成的批次保留（可见、可恢复、可继续删）。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MavenVersionTrashRequest"
+      responses:
+        "200":
+          description: 已移入回收站
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MavenVersionTrashResponse"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+        "404":
+          $ref: "#/components/responses/AssetOperationNotFound"
+        "409":
+          $ref: "#/components/responses/AssetOperationConflict"
+        "500":
+          $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/repositories/{name}/maven-versions/diagnose:
+    get:
+      operationId: diagnoseMavenCoordinate
+      summary: 诊断同一 Maven 坐标的跨仓重复（仅全局管理员）
+      description: |
+        扫描全部 Maven hosted 仓库，报告该坐标在哪些仓库存在、各自文件数与字节，
+        并给出**内容指纹**。
+
+        存在意义：同一坐标同时存在于 releases 与 snapshots 时，聚合仓会按成员顺序
+        遮蔽其中一份，客户端可能长期拿到旧内容，而两份只差几十 KB 时完全看不出来。
+        换 group 成员顺序不能解决，只能把"哪个被遮蔽"换到另一边——前提是先看得见重复。
+
+        指纹相同 = 纯冗余（删任一副本都安全）；指纹不同 = 真遮蔽风险，需人工判定正确来源。
+        本端点只读，不做任何修复。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+        - name: groupId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: artifactId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 重复诊断报告
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoordinateDuplicateReport"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+        "500":
+          $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/repositories/{name}/maven-packages/search:
+    get:
+      operationId: searchMavenPackageVersions
+      summary: 按 Maven 包名搜索版本（仅全局管理员）
+      description: |
+        按包名（`group:artifact`）列出该包下所有版本，用于批量维护。
+        既有资产浏览只能逐层进目录、逐个版本删，清理几十个陈旧版本要点几十次；
+        这个入口直接以包为起点。
+
+        `groupId` / `artifactId` / `version` 支持 `*` 通配（只匹配坐标，不匹配路径）。
+        `snapshotOnly` 只保留 SNAPSHOT 版本（版本名以 `-SNAPSHOT` 结尾，或目录内含字面
+        `-SNAPSHOT` 文件）；返回的 `suspect` 标出「有字面 SNAPSHOT 文件但无任何时间戳构建」
+        的疑似幽灵快照——正是 Nexus 事故里的形态。
+
+        本端点只读，不产生任何变更。删除请用 `POST .../maven-versions/trash-batch`
+        并回传具体版本坐标。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+        - name: groupId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 支持 `*` 通配（如 `com.tbao.*`）
+        - name: artifactId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 支持 `*` 通配（如 `tbaoolib`、`lib*`）
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 留空不限；支持 `*`（如 `1.17*`）
+        - name: snapshotOnly
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: updatedBefore
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 只保留更新时间早于该时间的版本（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:MM:SS`）
+        - name: minBytes
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: maxBytes
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 500
+      responses:
+        "200":
+          description: 匹配的版本列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MavenPackageSearchResult"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+        "404":
+          $ref: "#/components/responses/AssetOperationNotFound"
+        "409":
+          $ref: "#/components/responses/AssetOperationConflict"
+        "500":
+          $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/repositories/{name}/maven-versions/trash-batch:
+    post:
+      operationId: trashMavenVersionsBatch
+      summary: 批量把 Maven 版本移入回收站（仅全局管理员）
+      description: |
+        逐版本复用单版本删除，因此语义与 `POST .../maven-versions/trash` 完全一致：
+        软删除、保留 blob、可恢复、单版本内按批原子。
+
+        **部分成功是正常结果**：单个版本失败（如并发被改）不令其余回滚，
+        失败明细在 `failures` 中如实返回。全部失败时返回错误，
+        而不是一个显示「清理完成 0 个」的成功响应。
+
+        请求必须回传**用户在预览里确认过的具体版本坐标**，不接受筛选条件——
+        条件在两次请求之间可能匹配到新版本，凭条件删除等于删掉用户没看见的东西。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MavenBatchTrashRequest"
+      responses:
+        "200":
+          description: 批量清理结果（含部分成功）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MavenBatchTrashResponse"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+        "404":
+          $ref: "#/components/responses/AssetOperationNotFound"
+        "409":
+          $ref: "#/components/responses/AssetOperationConflict"
+        "500":
+          $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/maintenance/asset-trash:
+    get:
+      operationId: listAssetTrash
+      summary: 列出资产回收站条目（仅管理员）
+      description: |
+        资产回收站与存储清理回收站**共用同一个保留期与清理作业**，
+        但条目语义不同：资产条目保存 asset 元数据快照，恢复即重建该行。
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: 回收站条目与占用统计
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetTrashListResponse"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+  /api/v1/maintenance/asset-trash/restore:
+    post:
+      operationId: restoreAssetTrash
+      summary: 从资产回收站恢复（仅管理员）
+      description: |
+        按条目重建 asset 行。目标路径已存在时**保护性跳过**并如实报告冲突，
+        绝不覆盖——覆盖等于执行一次删除，与「恢复」语义相反。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetTrashIDsRequest"
+      responses:
+        "200":
+          description: 恢复结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetTrashRestoreResponse"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
+  /api/v1/maintenance/asset-trash/purge:
+    post:
+      operationId: purgeAssetTrash
+      summary: 彻底清理资产回收站条目（仅管理员，不可逆）
+      description: |
+        释放 blob 并标记条目为 purged。仅释放"无其它活引用"的 blob：
+        同一内容仍被别的路径引用时保持不动。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetTrashIDsRequest"
+      responses:
+        "200":
+          description: 清理结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetTrashPurgeResponse"
+        "400":
+          $ref: "#/components/responses/AssetOperationBadRequest"
+        "401":
+          $ref: "#/components/responses/AssetOperationUnauthorized"
+        "403":
+          $ref: "#/components/responses/AssetOperationForbidden"
   /api/v1/repositories/{name}/usage:
     get:
       operationId: getRepositoryUsage
@@ -7283,6 +7636,405 @@ components:
             $ref: "#/components/schemas/AssetSummary"
         total:
           type: integer
+    MavenPackageVersion:
+      type: object
+      required: [coordinate, versionDir, fileCount, bytes, updatedAt, suspect]
+      properties:
+        coordinate:
+          $ref: "#/components/schemas/MavenVersionCoordinate"
+        versionDir:
+          type: string
+        fileCount:
+          type: integer
+        bytes:
+          type: integer
+          format: int64
+        updatedAt:
+          type: string
+        createdAt:
+          type: string
+        literalSnapshotFiles:
+          type: integer
+          description: 文件名含 `-SNAPSHOT` 的文件数（字面快照形态）
+        timestampBuilds:
+          type: integer
+          description: 该版本内识别出的 SNAPSHOT 时间戳构建数
+        suspect:
+          type: boolean
+          description: |
+            疑似幽灵快照：有字面 SNAPSHOT 文件但没有任何时间戳构建。
+            这正是「快照内容混进不该有的仓库」的典型形态。
+    MavenPackageSearchResult:
+      type: object
+      required: [query, repository, versions, totalVersions, matchedBytes, truncated]
+      properties:
+        query:
+          $ref: "#/components/schemas/MavenPackageQuery"
+        repository:
+          type: string
+        artifactDirs:
+          type: array
+          items:
+            type: string
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MavenPackageVersion"
+        totalVersions:
+          type: integer
+          description: 筛选前的候选版本数
+        matchedBytes:
+          type: integer
+          format: int64
+        truncated:
+          type: boolean
+          description: 结果被 limit 截断，应收窄条件
+    MavenPackageQuery:
+      type: object
+      properties:
+        groupId:
+          type: string
+        artifactId:
+          type: string
+        version:
+          type: string
+        snapshotOnly:
+          type: boolean
+        updatedBefore:
+          type: string
+        minBytes:
+          type: integer
+          format: int64
+        maxBytes:
+          type: integer
+          format: int64
+        limit:
+          type: integer
+    MavenBatchTrashRequest:
+      type: object
+      required: [versions, overrideReason]
+      properties:
+        versions:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/MavenVersionCoordinate"
+        overrideReason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    MavenBatchTrashResponse:
+      type: object
+      required: [operationId, trashedVersions, trashedFiles, freedBytes]
+      properties:
+        operationId:
+          type: string
+        trashedVersions:
+          type: integer
+        trashedFiles:
+          type: integer
+        freedBytes:
+          type: integer
+          format: int64
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/MavenBatchFailure"
+    MavenBatchFailure:
+      type: object
+      required: [coordinate, reason]
+      properties:
+        coordinate:
+          $ref: "#/components/schemas/MavenVersionCoordinate"
+        reason:
+          type: string
+    CoordinateDuplicateSource:
+      type: object
+      required: [repository, type, fileCount, bytes, fingerprint, hasLiteralSnapshot]
+      properties:
+        repository:
+          type: string
+        type:
+          type: string
+        fileCount:
+          type: integer
+        bytes:
+          type: integer
+          format: int64
+        fingerprint:
+          type: string
+          description: 内容指纹；相同表示内容与布局完全一致（纯冗余而非遮蔽风险）
+        snapshotBuilds:
+          type: array
+          items:
+            type: string
+        hasLiteralSnapshot:
+          type: boolean
+    CoordinateDuplicateReport:
+      type: object
+      required: [coordinate, sources, identical, distinctFingerprints]
+      properties:
+        coordinate:
+          $ref: "#/components/schemas/MavenVersionCoordinate"
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoordinateDuplicateSource"
+        identical:
+          type: boolean
+        distinctFingerprints:
+          type: integer
+        warning:
+          type: string
+    MavenVersionTrashRequest:
+      type: object
+      required: [groupId, artifactId, version, overrideReason]
+      properties:
+        groupId:
+          type: string
+          description: Maven groupId（如 com.example，不允许含路径分隔符或 ..）
+        artifactId:
+          type: string
+        version:
+          type: string
+        buildId:
+          type: string
+          description: 仅 SNAPSHOT 版本有效；留空表示整个版本，指定则只清理该次时间戳构建
+        paths:
+          type: array
+          description: |
+            可选的待删路径子集。留空表示删除计划中的全部文件；
+            非空时必须是计划路径的子集，否则整批拒绝（防止前端删除用户未见过的文件）。
+          items:
+            type: string
+        overrideReason:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: 管理员执行删除的原因
+    MavenVersionTrashResponse:
+      type: object
+      required: [operationId, repository, trashed, batches, bytes, archivePath]
+      properties:
+        operationId:
+          type: string
+        repository:
+          type: string
+        trashed:
+          type: integer
+          description: 移入回收站的文件数
+        batches:
+          type: integer
+          description: 实际提交的批次数（每批为一个独立原子操作）
+        bytes:
+          type: integer
+          format: int64
+        archivePath:
+          type: string
+          description: 该版本在仓库内的目录
+    MavenVersionPlan:
+      type: object
+      required: [coordinate, repository, directory, files, totalFiles, totalBytes, exists]
+      properties:
+        coordinate:
+          $ref: "#/components/schemas/MavenVersionCoordinate"
+        repository:
+          type: string
+        directory:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/MavenVersionFile"
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MavenVersionCategoryStat"
+        snapshotBuilds:
+          type: array
+          description: 仅 SNAPSHOT 版本：列出全部历史构建（字面 SNAPSHOT 记为 buildId=SNAPSHOT）
+          items:
+            $ref: "#/components/schemas/MavenSnapshotBuild"
+        literalSnapshotFiles:
+          type: integer
+        totalFiles:
+          type: integer
+        totalBytes:
+          type: integer
+          format: int64
+        exists:
+          type: boolean
+    MavenVersionCoordinate:
+      type: object
+      required: [groupId, artifactId, version]
+      properties:
+        groupId:
+          type: string
+        artifactId:
+          type: string
+        version:
+          type: string
+        buildId:
+          type: string
+    MavenVersionFile:
+      type: object
+      required: [path, size, category]
+      properties:
+        path:
+          type: string
+        size:
+          type: integer
+          format: int64
+        category:
+          type: string
+          enum: [primary, classifier, checksum, metadata, other]
+        blobHash:
+          type: string
+        checksumType:
+          type: string
+        buildId:
+          type: string
+        updatedAt:
+          type: string
+    MavenVersionCategoryStat:
+      type: object
+      required: [category, fileCount, bytes]
+      properties:
+        category:
+          type: string
+          enum: [primary, classifier, checksum, metadata, other]
+        fileCount:
+          type: integer
+        bytes:
+          type: integer
+          format: int64
+    MavenSnapshotBuild:
+      type: object
+      required: [buildId, fileCount, bytes]
+      properties:
+        buildId:
+          type: string
+        fileCount:
+          type: integer
+        bytes:
+          type: integer
+          format: int64
+    AssetTrashListResponse:
+      type: object
+      required: [items, total, page, pageSize, stats]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetTrashEntry"
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        stats:
+          $ref: "#/components/schemas/AssetTrashStats"
+    AssetTrashEntry:
+      type: object
+      required: [id, repositoryId, path, size, status, trashedAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        repositoryId:
+          type: integer
+          format: int64
+        repositoryName:
+          type: string
+        path:
+          type: string
+        blobHash:
+          type: string
+        size:
+          type: integer
+          format: int64
+        contentType:
+          type: string
+        sha1:
+          type: string
+        md5:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        scope:
+          type: string
+          enum: [version, snapshot_build, artifact]
+        actor:
+          type: string
+        operationId:
+          type: string
+        status:
+          type: string
+          enum: [staged, restored, purged]
+          x-enum-varnames:
+            [AssetTrashStatusStaged, AssetTrashStatusRestored, AssetTrashStatusPurged]
+        trashedAt:
+          type: string
+        resolvedAt:
+          type: string
+    AssetTrashStats:
+      type: object
+      required: [entries, bytes]
+      properties:
+        entries:
+          type: integer
+        bytes:
+          type: integer
+          format: int64
+    AssetTrashIDsRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: integer
+            format: int64
+    AssetTrashConflict:
+      type: object
+      required: [id, path, reason]
+      properties:
+        id:
+          type: integer
+          format: int64
+        path:
+          type: string
+        reason:
+          type: string
+    AssetTrashRestoreResponse:
+      type: object
+      required: [restored]
+      properties:
+        restored:
+          type: integer
+        conflicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetTrashConflict"
+        missing:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetTrashConflict"
+    AssetTrashPurgeResponse:
+      type: object
+      required: [purged, freedBytes]
+      properties:
+        purged:
+          type: integer
+        freedBytes:
+          type: integer
+          format: int64
     BatchDeleteAssetsRequest:
       type: object
       required: [paths, overrideReason]

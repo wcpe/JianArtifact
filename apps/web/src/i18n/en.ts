@@ -250,6 +250,8 @@ export const en = {
   maintenance: {
     tabHealth: "Storage health",
     tabTrash: "Recycle bin",
+    tabMavenPackages: "Maven package cleanup",
+    tabMavenVersions: "Maven version cleanup",
     tabTasks: "Cleanup tasks",
     tabJobs: "Jobs",
     healthBodyHint:
@@ -264,6 +266,36 @@ export const en = {
     preRestore: "Rollback backups",
     staleUploads: "Interrupted uploads",
     total: "Data dir total",
+    // Metric definitions (shown on hover): explain what the number counts and who
+    // reclaims it, so a read-only stat is not mistaken for a one-click cleanup item.
+    orphanBlobsHint:
+      "Blobs present on disk but referenced by no asset; reclaimed only by the blob-gc job",
+    quarantinedHint:
+      "Blobs staged after deletion or overwrite; reclaimed by the storage-cleanup job",
+    emptyDirsHint:
+      "Empty shard directories left behind after blobs were removed; they hold no data themselves",
+    preRestoreHint:
+      "Rollback backups created before a restore; the backup-orphan-cleanup job keeps the most recent N",
+    staleUploadsHint:
+      "Staging space held by interrupted or abandoned chunked uploads; can be moved to the recycle bin",
+    totalHint: "Total data directory usage, used as the denominator for reclaimable shares",
+    // Reclaimable share panel
+    reclaimTitle: "Reclaimable share",
+    reclaimFormula: "Reclaimable bytes by category ÷ total data directory usage",
+    reclaimHeadline: "{{bytes}} reclaimable of {{total}}",
+    reclaimCount: "{{count}} items",
+    reclaimEmpty: "The data directory is empty, so there is no share to compute.",
+    reclaimNote:
+      "The share counts only categories with a byte size: empty shard directories hold no data and are excluded. Orphan blobs are reclaimed by the blob-gc job alone; the other three can be moved to the recycle bin with the cleanup buttons above.",
+    // Recent cleanup activity (last block on the health tab)
+    recentTitle: "Recent cleanups",
+    recentHint: 'Results of the latest runs; full history lives under "Cleanup tasks"',
+    recentViewAll: "View all",
+    recentEmpty:
+      "No cleanup has run yet. The buttons above move definitively reclaimable items into the recycle bin.",
+    recentUnavailable:
+      "Cleanup records are unavailable right now; the health results above are unaffected.",
+    recentProcessed: "{{done}}/{{total}} items",
     previewCleanup: "Preview cleanup",
     kindEmptyDirs: "Empty shard dirs",
     kindStaleUploads: "Interrupted uploads",
@@ -306,6 +338,9 @@ export const en = {
     refresh: "Refresh",
     trashTitle: "Recycle bin",
     trashUsage: "{{count}} items / {{bytes}}",
+    // Recycle bin page counter: show the current page range AND the full total.
+    // A bare total makes the list look complete (the old fixed 100/50 fetch misled this way).
+    trashPageUsage: "Items {{from}}–{{to}} of {{total}} / {{bytes}}",
     trashHint:
       "The recycle bin records the original location only — it is not a backup; no extra copy is kept.",
     trashEmpty: "Recycle bin is empty",
@@ -332,6 +367,116 @@ export const en = {
       "This job deletes data directly (it does NOT go through the recycle bin) and cannot be undone. Continue?",
     jobAccepted: "Accepted; see cleanup tasks or job status for the result",
     actionFailed: "Operation failed",
+    // Confirmation word for irreversible actions (the last gate before destroying data).
+    // English uses "delete": the irreversible ones are all deletions, and it reads as the
+    // action itself rather than an arbitrary password.
+    confirmPhrase: "delete",
+    confirmPhrasePrompt: 'Type "{{phrase}}" to confirm',
+    confirmPhraseLabel: "Confirmation word",
+    // ── Maven package batch cleanup ──
+    pkgReversibleNotice:
+      "Deletion is recoverable: versions move to the recycle bin and blobs are kept until you purge them or retention expires.",
+    pkgRepo: "Repository",
+    pkgRepoPlaceholder: "Select a repository",
+    pkgGroupIdPlaceholder: "com.tbao or com.tbao.*",
+    pkgArtifactIdPlaceholder: "tbaoolib or lib*",
+    pkgVersion: "Version",
+    pkgVersionPlaceholder: "Blank = all, e.g. 1.17*",
+    pkgUpdatedBefore: "Updated before",
+    pkgUpdatedBeforePlaceholder: "YYYY-MM-DD",
+    pkgMinBytes: "Min bytes",
+    pkgMaxBytes: "Max bytes",
+    pkgBytesUnlimited: "Any",
+    pkgSnapshotOnly: "Only versions containing SNAPSHOT",
+    pkgSearch: "Search versions",
+    pkgErrNoRepo: "Select a repository first",
+    pkgErrNoCoordinate: "Fill in at least groupId or artifactId (wildcards allowed)",
+    pkgErrSearchFailed: "Search failed",
+    pkgErrTrashFailed: "Batch cleanup failed",
+    pkgTruncated:
+      "Results were truncated ({{total}} versions total, showing the first {{shown}}). Narrow the filters.",
+    pkgEmpty:
+      "No matching versions. If the package exists, check that groupId is complete (com.tbao, not tbao).",
+    pkgSelectAll: "Select all ({{count}})",
+    pkgDeselectAll: "Clear selection",
+    pkgSelection: "{{versions}} versions / {{files}} files / {{bytes}} selected",
+    pkgTrashSelected: "Move to recycle bin ({{count}})",
+    pkgColVersion: "Version",
+    pkgColFiles: "Files",
+    pkgColSize: "Size",
+    pkgColUpdated: "Updated",
+    pkgColFlags: "Flags",
+    pkgSelectRow: "Select {{key}}",
+    pkgFlagGhostSnapshot: "Likely ghost snapshot",
+    pkgFlagLiteralSnapshot: "Literal snapshot",
+    pkgTimestampBuilds: "{{count}} builds",
+    pkgConfirmTitle: "Confirm moving to the recycle bin",
+    pkgConfirmMessage:
+      "This moves {{versions}} versions out of {{repo}} ({{files}} files / {{bytes}}).\n\nThey go to the recycle bin and can be restored at any time; disk space is only freed by a purge or when retention expires.",
+    pkgTrashReason: "Batch Maven version cleanup ({{count}} versions, from package search)",
+    pkgPartialTitle: "Partially completed: {{ok}} succeeded, {{failed}} failed",
+    pkgTrashed: "Moved to the recycle bin: {{versions}} versions / {{files}} files / {{bytes}}",
+    // ── Maven version cleanup ──
+    verReversibleNotice:
+      "Deletion is recoverable: files move to the recycle bin and blobs are kept until you purge them or retention expires.",
+    verRepo: "Repository",
+    verRepoPlaceholder: "Select a repository",
+    verCoordinate: "Coordinate",
+    verCoordinateDescription:
+      "group:artifact:version; for SNAPSHOT, a 4th segment picks a single build",
+    verPreview: "Preview files",
+    verErrBadCoordinate: "Enter a coordinate like group:artifact:version",
+    verErrPreviewFailed: "Preview failed",
+    verErrDeleteFailed: "Delete failed",
+    verNotFound: "No artifact found at this coordinate in {{repo}}. Check group/artifact/version.",
+    verPlanTitle: "Version cleanup preview",
+    planTotalFiles: "Total files",
+    planTotalBytes: "Total size",
+    planSelectedFiles: "Selected files",
+    planSelectedBytes: "Selected size",
+    verByCategory: "By category:",
+    verSnapshotBuilds: "Snapshot history builds ({{count}})",
+    verSnapshotBuild: "{{buildId}} · {{count}} files",
+    verDirectory: "Directory:",
+    verTrashSelected: "Move to recycle bin ({{count}})",
+    verColPath: "Path",
+    verColCategory: "Category",
+    verColBuild: "Build",
+    verColSize: "Size",
+    verSelectRow: "Select {{path}}",
+    verCategoryPrimary: "Primary",
+    verCategoryClassifier: "Classifiers",
+    verCategoryChecksum: "Checksums",
+    verCategoryMetadata: "Metadata",
+    verCategoryOther: "Other",
+    verConfirmTitle: "Confirm moving to the recycle bin",
+    verConfirmMessage:
+      "This moves {{files}} files / {{bytes}} out of {{repo}} at coordinate {{coordinate}}{{buildPart}}.\n\nThey go to the recycle bin and can be restored at any time; disk space is only freed by a purge or when retention expires.",
+    verConfirmBuildPart: " (build {{buildId}})",
+    verTrashReason: "Maven version cleanup from the maintenance page: {{coordinate}}",
+    verTrashed: "Moved to the recycle bin: {{files}} files / {{bytes}} ({{batches}} batches)",
+    // ── Unified recycle bin (two partitions) ──
+    trashPartitionArtifacts: "Artifacts (deleted versions)",
+    trashPartitionStorage: "Storage cleanup (garbage found by jobs)",
+    trashStillOnDisk:
+      "Every entry here still occupies disk space and can be restored. Space is only freed by a purge or when retention expires.",
+    trashArtifactsEmpty:
+      'No deleted artifacts. Versions deleted under "Maven package cleanup" show up here.',
+    trashColRepository: "Repository",
+    trashColTrashedAt: "Deleted at",
+    trashColSource: "Scope",
+    trashScopeSnapshotBuild: "Snapshot build",
+    trashScopeWholeVersion: "Whole version",
+    trashStaleHint:
+      "Refresh failed, so the list may be stale; the content below is from the last successful load.",
+    trashSelectedSuffix: " ({{count}} selected / {{bytes}})",
+    trashRestoreSelectedCount: "Restore selected ({{count}})",
+    trashPurgeSelectedCount: "Purge ({{count}})",
+    trashRestoredFiles: "Restored {{count}} files",
+    trashPurgedFiles: "Purged {{count}} files, freed {{bytes}}",
+    trashPurgeConfirmTitle: "Confirm permanent purge",
+    trashPurgeConfirmMessage:
+      'This permanently frees the disk space used by {{count}} files. It cannot be undone.\n\nIf you only want to reclaim visible space and may still need these files, use "Restore" instead.',
   },
   licenses: {
     title: "Open Source Licenses",
