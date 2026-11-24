@@ -6,6 +6,7 @@ import { http, HttpResponse } from "msw";
 import { mockAuditLogList, mockMetrics, mockUser } from "./handlers";
 import { securityAuditHandlers } from "./securityAudit";
 import { securityCaseHandlers } from "./securityCases";
+import { securityOpsHandlers, mfaEnrollChallenge } from "./securityOps";
 import {
   observabilityStore,
   type AuditCategory,
@@ -909,6 +910,7 @@ function rawProtocolTarget(request: Request): { repository: string; path: string
 interface BootstrapBody {
   username?: string;
   password?: string;
+  claimTicket?: string;
 }
 interface CreateUserBody {
   username?: string;
@@ -1081,6 +1083,7 @@ function mockFormatDurationHuman(seconds: number): string {
 export const handlers = [
   ...securityAuditHandlers,
   ...securityCaseHandlers,
+  ...securityOpsHandlers,
   // 安全管理路由先鉴权，其余业务路由由通用场景守卫处理。
   // 同一个前置守卫承担网速模拟，未命中场景时继续走既有路由。
   http.all("*", async ({ request }) => {
@@ -1225,7 +1228,11 @@ export const handlers = [
     if (!user) {
       return err("already_initialized", "实例已初始化，自举关闭", 409);
     }
-    return HttpResponse.json({ token: MOCK_TOKEN, user }, { status: 201 });
+    if (body.claimTicket) {
+      // 持安装认领票：不直签会话，返回因子登记挑战（受控安装契约）。
+      return HttpResponse.json(mfaEnrollChallenge("claim_required", user), { status: 200 });
+    }
+    return HttpResponse.json({ next: "authenticated", token: MOCK_TOKEN, user }, { status: 201 });
   }),
 
   http.post("*/api/v1/auth/login", async ({ request }) => {
@@ -1239,6 +1246,7 @@ export const handlers = [
     }
     return HttpResponse.json(
       {
+        next: "authenticated",
         token:
           user.id === MOCK_SECOND_ADMIN_ID
             ? MOCK_SECOND_ADMIN_TOKEN

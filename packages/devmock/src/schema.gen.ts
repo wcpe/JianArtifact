@@ -459,6 +459,261 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/mfa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 兑现 login_mfa 受限挑战（OTP 命中后签发会话） */
+        post: operations["verifyLoginMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用恢复码兑现 login_mfa 挑战并签发 factor_recover 重绑挑战 */
+        post: operations["recoverLoginMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 第一因素 + 认领票进入受控登记（返回挑战与登记 URI） */
+        post: operations["claimMfaEnroll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/step-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 为当前会话签发 step_up 受限挑战（敏感操作前的强认证提升） */
+        post: operations["beginMfaStepUp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/step-up/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 兑现 step_up 挑战并把会话强认证水位抬到当前 */
+        post: operations["verifyMfaStepUp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 当前会话账号的强因子状态 */
+        get: operations["getMfaStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 发起强因子登记（返回挑战与登记 URI；会话内限一次活跃登记） */
+        post: operations["beginMfaEnroll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/enroll/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用首枚 OTP 确认登记并返回恢复码批次 */
+        post: operations["confirmMfaEnroll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 预览事故处置动作（幂等；5 分钟内确认有效） */
+        post: operations["previewSecurityAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/actions/{actionId}/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 确认并执行预览动作（需近期强认证与动作摘要） */
+        post: operations["executeSecurityAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 恢复隔离闸状态（管理员可读） */
+        get: operations["getRecoveryGate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/recovery/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 恢复启动进入隔离（normal → isolated） */
+        post: operations["beginRecoveryIsolation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/recovery/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 上报可信检查点核对结果（isolated → reconciling → ready_for_review / isolated） */
+        post: operations["reportRecoveryCheckpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/recovery/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 强认证管理员确认解闸（ready_for_review → normal） */
+        post: operations["confirmRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 保全持有清单（管理员只读） */
+        get: operations["listEvidenceHolds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me": {
         parameters: {
             query?: never;
@@ -584,6 +839,259 @@ export interface paths {
         get: operations["getPrivateAdmissionCandidate"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 站内安全通知游标分页 */
+        get: operations["listSecurityNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/notifications/{noticeId}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 确认本人通知（幂等） */
+        put: operations["ackSecurityNotification"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/notification-deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 站外投递脱敏分页 */
+        get: operations["listNotificationDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 风险调查案件清单 */
+        get: operations["listSecurityCases"];
+        put?: never;
+        /** 建案（人工或规则入口共用） */
+        post: operations["openSecurityCase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/cases/{caseId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 案件详情（头 + 命中 + 关联 + 本人既読水位） */
+        get: operations["getSecurityCase"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/cases/{caseId}/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 案件四栏分页（timeline/uploads/identity/actions-evidence） */
+        get: operations["getSecurityCaseSection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/qq-bindings/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 绑定管理员账号与 QQ openid */
+        put: operations["setSecurityQQBinding"];
+        post?: never;
+        /** 解绑 QQ openid */
+        delete: operations["deleteSecurityQQBinding"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/cases/{caseId}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 认领/结案/重开案件
+         * @description claim/close/reopen；close 需 reason+resolutionCode，全部绑定 targetVersion。
+         */
+        post: operations["transitionSecurityCase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/cases/{caseId}/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 案件关联事件（fact/candidate） */
+        get: operations["listSecurityCaseLinks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/cases/{caseId}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 案件既読水位（本人・按版本幂等） */
+        put: operations["markSecurityCaseRead"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/notification-deliveries/{deliveryId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 失败投递的手動再試行（targetVersion=attempts CAS・冪等） */
+        post: operations["retryNotificationDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 规则命中清单 */
+        get: operations["listSecurityFindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/admission/candidates/{operationId}/decisions/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 预览候选裁决可行性并签发短效确认令牌
+         * @description 仅管理员且经近期强认证复核可调用；预览不改变候选。返回可行性、阻塞原因及短效单次
+         *     `confirmationToken`；令牌绑定主体、动作、目标版本、清单摘要、规则版本与有效期，
+         *     实际裁决须回传同一令牌，重放或绑定失效返回 409 `security_confirmation_stale`。
+         */
+        post: operations["previewPrivateAdmissionDecision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security/admission/candidates/{operationId}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 管理员裁决待审私有候选
+         * @description 仅管理员且经近期强认证复核可调用。`awaiting_review` 候选可 `approve`（提升封存字节为公开资产并置 `published`）
+         *     或 `reject`（置 `rejected`）。批准不是发布：提升按顺序先搬运字节、再同事务推进状态；状态未裁决前字节不公开。
+         *     非待审状态统一返回 409 `admission_decision_conflict`。
+         */
+        post: operations["decidePrivateAdmissionCandidate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2453,10 +2961,10 @@ export interface components {
             /** @description 已确认的清单摘要，未确认时省略。 */
             manifestDigest?: string;
             /**
-             * @description 已封存、拒绝或已过期；已封存不表示已发布。
+             * @description 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
              * @enum {string}
              */
-            state: "staged" | "rejected" | "expired";
+            state: "staged" | "awaiting_review" | "published" | "rejected" | "expired";
             /**
              * @description 仅跟踪私有状态，不证明扫描覆盖。
              * @enum {string}
@@ -2468,10 +2976,142 @@ export interface components {
              */
             expiresAt: string;
             /**
-             * @description 已确认的硬完整性失败；无此事实时省略。
+             * Format: int64
+             * @description 批准后提升为公开资产的资产号；未发布时省略。
+             */
+            publishedAssetId?: number;
+            /**
+             * @description 已确认的硬完整性失败或管理员驳回；无此事实时省略。
              * @enum {string}
              */
-            errorCode?: "admission_integrity_failed";
+            errorCode?: "admission_integrity_failed" | "manual_reject";
+        };
+        PrivateAdmissionDecisionRequest: {
+            /**
+             * @description 批准提升为公开资产或驳回候选。
+             * @enum {string}
+             */
+            action: "approve" | "reject";
+            reason: string;
+            /** @description 同一主体经 preview 取得的短效单次确认令牌；令牌绑定人、动作、版本、摘要、规则与有效期。 */
+            confirmationToken: string;
+        };
+        PrivateAdmissionDecisionPreviewRequest: {
+            /** @enum {string} */
+            action: "approve" | "reject";
+            reason: string;
+        };
+        SecurityNotificationPage: {
+            items: {
+                /** Format: int64 */
+                seq?: number;
+                noticeId?: string;
+                kind?: string;
+                title?: string;
+                payload?: string;
+                /** Format: int64 */
+                createdUnix?: number;
+                acked?: boolean;
+            }[];
+            /** Format: int64 */
+            nextCursor?: number;
+            hasMore: boolean;
+            /** Format: int64 */
+            watermark: number;
+        };
+        SecurityNotificationDelivery: {
+            deliveryId: string;
+            /** @enum {string} */
+            channel: "smtp" | "qq";
+            targetMasked: string;
+            /** @enum {string} */
+            state: "pending" | "attempted" | "accepted" | "failed";
+            /** Format: int64 */
+            attempts?: number;
+            lastError?: string;
+        };
+        SecurityCase: {
+            caseId: string;
+            title: string;
+            /** @enum {string} */
+            state: "open" | "claimed" | "closed";
+            /** @enum {string} */
+            severity: "low" | "medium" | "high" | "critical";
+            resolution?: string;
+            /** Format: int64 */
+            targetVersion: number;
+            /** Format: int64 */
+            ownerUserId?: number;
+            reason?: string;
+            /** Format: int64 */
+            createdUnix?: number;
+            /** Format: int64 */
+            updatedUnix?: number;
+        };
+        SecurityCaseDetail: {
+            case: components["schemas"]["SecurityCase"];
+            findings: components["schemas"]["SecurityFinding"][];
+            links: components["schemas"]["SecurityCaseLink"][];
+            /** Format: int64 */
+            readSeenVersion?: number;
+            /** Format: int64 */
+            readUnix?: number;
+        };
+        SecurityCaseOpenRequest: {
+            title: string;
+            /** @enum {string} */
+            severity: "low" | "medium" | "high" | "critical";
+            reason: string;
+            eventLinks?: {
+                eventId: string;
+                /** @enum {string} */
+                linkKind: "fact" | "candidate";
+            }[];
+        };
+        SecurityCaseTransitionRequest: {
+            /** @enum {string} */
+            action: "claim" | "close" | "reopen";
+            /** Format: int64 */
+            targetVersion: number;
+            reason?: string;
+            resolutionCode?: string;
+        };
+        SecurityCaseLink: {
+            caseId: string;
+            eventId: string;
+            /** @enum {string} */
+            linkKind: "fact" | "candidate";
+            linkedBy?: string;
+            /** Format: int64 */
+            linkedUnix?: number;
+        };
+        SecurityFinding: {
+            findingId: string;
+            ruleId: string;
+            ruleVersion: number;
+            /** @enum {string} */
+            severity: "low" | "medium" | "high" | "critical";
+            /** @enum {string} */
+            confidence?: "low" | "medium" | "high";
+            subjectKey: string;
+            /** Format: int64 */
+            windowFrom?: number;
+            /** Format: int64 */
+            windowTo?: number;
+            summary: string;
+            caseId?: string;
+            /** Format: int64 */
+            createdUnix?: number;
+        };
+        PrivateAdmissionDecisionPreviewResponse: {
+            feasible: boolean;
+            blockers: string[];
+            confirmationToken?: string;
+            /**
+             * Format: date-time
+             * @description 处置原因，写入裁决事实。
+             */
+            expiresAt?: string;
         };
         /**
          * @description 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
@@ -2970,17 +3610,120 @@ export interface components {
             /** @description 当前进程启动时启用的格式，按字典序返回 */
             formats: ("raw" | "maven" | "npm" | "docker" | "cargo" | "pypi" | "gomod" | "nuget")[];
         };
+        SecurityActionTarget: {
+            /** @enum {string} */
+            kind: "instance_write_lock" | "repository" | "path" | "version" | "ip_cidr" | "digest" | "hold";
+            target?: string;
+            effect?: string;
+        };
+        SecurityActionPreviewRequest: {
+            /** @enum {string} */
+            actionType: "restrict" | "lift_restriction" | "hold_evidence" | "release_hold";
+            reason: string;
+            idempotencyKey: string;
+            targets: components["schemas"]["SecurityActionTarget"][];
+        };
+        SecurityActionPreview: {
+            actionId: string;
+            actionType: string;
+            actionDigest: string;
+            expiresAt: string;
+            targets: string[];
+        };
+        SecurityActionExecuteRequest: {
+            /** @description 预览返回的动作摘要；漂移即拒绝 */
+            actionDigest: string;
+        };
+        SecurityActionItem: {
+            seq: number;
+            target: string;
+            outcome: string;
+            detail: string;
+        };
+        SecurityActionResult: {
+            actionId: string;
+            state: string;
+            items: components["schemas"]["SecurityActionItem"][];
+        };
         BootstrapRequest: {
             username: string;
             password: string;
+            /** @description claim_install 安装认领票；提供时走受控安装（不直签会话，返回登记挑战） */
+            claimTicket?: string;
         };
         LoginRequest: {
             username: string;
             password: string;
         };
         LoginResponse: {
+            /**
+             * @description 登录签发裁决；authenticated 才发放会话令牌
+             * @enum {string}
+             */
+            next: "authenticated" | "mfa_required" | "claim_required";
+            /** @description 会话 JWT；next != authenticated 时为空串 */
             token: string;
+            /** @description login_mfa 受限挑战标识；仅 next=mfa_required 时存在 */
+            challengeId?: string;
+            /** @description login_mfa 受限挑战明文；仅 next=mfa_required 时存在，展示一次后不持久 */
+            challengeToken?: string;
+            /** @description 挑战过期时间（RFC3339） */
+            challengeExpiresAt?: string;
+            /** @description otpauth:// URI；仅受控安装/认领引导返回，展示一次后不持久 */
+            enrollmentUri?: string;
             user: components["schemas"]["User"];
+        };
+        MfaEnrollResponse: {
+            challengeId: string;
+            /** @description 受限挑战明文，展示一次后不持久 */
+            challengeToken: string;
+            /** @description 挑战过期时间（RFC3339） */
+            expiresAt: string;
+            /** @description otpauth:// URI，供认证器扫码/手动录入 */
+            enrollmentUri: string;
+        };
+        MfaConfirmRequest: {
+            challengeToken: string;
+            otp: string;
+            /** @description 认领来源挑战必须出示的在途 claim_admin 票（仅认领流程使用） */
+            claimTicket?: string;
+        };
+        MfaClaimRequest: {
+            username: string;
+            password: string;
+            /** @description 受控操作者出具的一次性认领票明文 */
+            claimTicket: string;
+        };
+        MfaStepUpChallenge: {
+            challengeId: string;
+            challengeToken: string;
+            /** @description RFC3339 */
+            expiresAt: string;
+        };
+        MfaVerifiedResponse: {
+            /** @description 会话近期强认证水位（RFC3339） */
+            mfaVerifiedAt: string;
+        };
+        MfaVerifyRequest: {
+            /** @description login_mfa 受限挑战明文 */
+            challengeToken: string;
+            otp: string;
+        };
+        MfaRecoverRequest: {
+            /** @description login_mfa 受限挑战明文（第一因素已验证的凭据） */
+            challengeToken: string;
+            recoveryCode: string;
+        };
+        MfaRecoveryCodes: {
+            /** @description 恢复码批次，仅展示一次 */
+            recoveryCodes: string[];
+        };
+        MfaStatusResponse: {
+            enrolled: boolean;
+            enrollmentPending: boolean;
+            recoveryCodesRemaining: number;
+            /** @description 账号是否被策略强制要求启用强因子（管理员） */
+            mfaRequired: boolean;
         };
         User: {
             /** Format: int64 */
@@ -3129,13 +3872,32 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
+            /**
+             * @description 机器凭据用途；空为过渡期未限用途旧凭据。
+             * @enum {string}
+             */
+            purpose?: "" | "artifact_read" | "artifact_publish";
+            scopes?: components["schemas"]["MachineTokenScope"][];
+            expiresAt?: string;
             createdAt: string;
+        };
+        MachineTokenScope: {
+            /** @description 仓库名，签发时解析为稳定 ID。 */
+            repository: string;
+            /** @description 规范路径段前缀；空前缀覆盖仓库下全部路径。 */
+            pathPrefix?: string;
+            actions: ("read" | "publish")[];
         };
         TokenList: {
             items: components["schemas"]["Token"][];
         };
         CreateTokenRequest: {
             name: string;
+            /** @enum {string} */
+            purpose?: "" | "artifact_read" | "artifact_publish";
+            scopes?: components["schemas"]["MachineTokenScope"][];
+            /** @description 有效期天数，默认 30，上限 90。 */
+            expiresDays?: number;
         };
         TokenCreated: {
             /** Format: int64 */
@@ -3143,6 +3905,9 @@ export interface components {
             name: string;
             /** @description 明文令牌，仅此次返回一次。 */
             token: string;
+            /** @enum {string} */
+            purpose?: "" | "artifact_read" | "artifact_publish";
+            expiresAt?: string;
             createdAt: string;
         };
         Repository: {
@@ -4363,6 +5128,15 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description 敏感操作缺少窗口内的近期强认证；`error.code` 为 `recent_mfa_required`。 */
+        RecentMfaRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。 */
         PublishPolicyWriteConflict: {
             headers: {
@@ -5390,6 +6164,393 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    verifyLoginMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description 第二因素验证通过，返回会话 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    recoverLoginMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaRecoverRequest"];
+            };
+        };
+        responses: {
+            /** @description 恢复码有效，返回重绑挑战与新的登记 URI */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaEnrollResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    claimMfaEnroll: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description 票与口令有效，返回登记挑战与 URI */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaEnrollResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    beginMfaStepUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description step_up 挑战 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaStepUpChallenge"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    verifyMfaStepUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description 已提升；返回水位时间 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaVerifiedResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getMfaStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 因子状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    beginMfaEnroll: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 登记挑战 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaEnrollResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    confirmMfaEnroll: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description 登记完成，返回恢复码（仅展示一次） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaRecoveryCodes"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    previewSecurityAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityActionPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description 动作预览 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityActionPreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    executeSecurityAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityActionExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description 逐项执行结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityActionResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getRecoveryGate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 闸状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    beginRecoveryIsolation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    restoreId: string;
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 已隔离 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    reportRecoveryCheckpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    restoreId: string;
+                    /** @enum {string} */
+                    checkpointStatus: "verified" | "stale" | "missing" | "mismatch";
+                    verifiedWatermark: number;
+                };
+            };
+        };
+        responses: {
+            /** @description 已受理 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    confirmRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    restoreId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 已解闸 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listEvidenceHolds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 清单 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     getCurrentUser: {
         parameters: {
             query?: never;
@@ -5606,6 +6767,474 @@ export interface operations {
             401: components["responses"]["PrivateAdmissionUnauthenticated"];
             403: components["responses"]["PrivateAdmissionForbidden"];
             404: components["responses"]["PrivateAdmissionNotFound"];
+            503: components["responses"]["PrivateAdmissionUnavailable"];
+        };
+    };
+    listSecurityNotifications: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 通知页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityNotificationPage"];
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    ackSecurityNotification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                noticeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 确认时间 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        ackAt?: number;
+                    };
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+            /** @description notification_not_found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listNotificationDeliveries: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 投递列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityNotificationDelivery"][];
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    listSecurityCases: {
+        parameters: {
+            query?: {
+                state?: "open" | "claimed" | "closed";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 案件列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityCase"][];
+                };
+            };
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    openSecurityCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityCaseOpenRequest"];
+            };
+        };
+        responses: {
+            /** @description 已建案件 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityCase"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    getSecurityCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 案件详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityCaseDetail"];
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+        };
+    };
+    getSecurityCaseSection: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                caseId: string;
+                section: "timeline" | "uploads" | "identity" | "actions-evidence";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 分栏内容（结构随 section 变化） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+        };
+    };
+    setSecurityQQBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    openid: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 已绑定 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    deleteSecurityQQBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已解绑 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+        };
+    };
+    transitionSecurityCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityCaseTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description 更新后的案件 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityCase"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            /** @description targetVersion 漂移，`security_confirmation_stale`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listSecurityCaseLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 关联列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityCaseLink"][];
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    markSecurityCaseRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: int64 */
+                    seenVersion: number;
+                };
+            };
+        };
+        responses: {
+            /** @description 既読水位 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        readUnix: number;
+                        /** Format: int64 */
+                        seenVersion: number;
+                    };
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            /** @description seenVersion 超过案件現版本，`security_confirmation_stale`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    retryNotificationDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deliveryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: int64 */
+                    targetVersion: number;
+                };
+            };
+        };
+        responses: {
+            /** @description 更新后的投递行 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityNotificationDelivery"];
+                };
+            };
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            /** @description targetVersion 漂移，`security_confirmation_stale`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listSecurityFindings: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 命中列表（新到旧） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityFinding"][];
+                };
+            };
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["RecentMfaRequired"];
+        };
+    };
+    previewPrivateAdmissionDecision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 服务端分配的规范小写 UUIDv4，不是访问凭证。 */
+                operationId: components["parameters"]["PrivateAdmissionOperationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivateAdmissionDecisionPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description 预览结果与确认令牌 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAdmissionDecisionPreviewResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            503: components["responses"]["PrivateAdmissionUnavailable"];
+        };
+    };
+    decidePrivateAdmissionCandidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 服务端分配的规范小写 UUIDv4，不是访问凭证。 */
+                operationId: components["parameters"]["PrivateAdmissionOperationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivateAdmissionDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description 裁决后的候选状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAdmissionCandidateStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["RecentMfaRequired"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            /** @description 候选不在待审状态；`error.code` 为 `admission_decision_conflict`。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["PrivateAdmissionUnavailable"];
         };
     };

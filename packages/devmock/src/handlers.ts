@@ -143,7 +143,11 @@ export function mockUser(): User {
 
 /** POST /auth/{bootstrap,login} 的契约响应。 */
 export function mockLoginResponse(): LoginResponse {
-  return { token: "mock.jwt.token", user: mockUser() };
+  return {
+    next: "authenticated",
+    token: "mock.jwt.token",
+    user: mockUser(),
+  };
 }
 
 /** GET /api/v1/users 的契约响应。 */

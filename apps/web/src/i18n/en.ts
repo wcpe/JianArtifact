@@ -301,6 +301,7 @@ export const en = {
     statusUnavailable:
       "Unable to confirm whether this instance allows initialization; please try again later.",
     claimRequired: "This account must enroll a factor with a claim ticket before sign-in. Enter the ticket and submit again.",
+    enrollFailed: "Factor enrollment failed. Check the one-time code and retry.",
     bootstrapFailed: "Failed to create the administrator, please check and try again.",
   },
   dashboard: {

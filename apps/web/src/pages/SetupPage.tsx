@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   Center,
+  Code,
   Group,
   PasswordInput,
   Progress,
@@ -22,7 +23,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
 
-import { getStatus } from "../api/endpoints";
+import { confirmMfaEnroll, getStatus } from "../api/endpoints";
+import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { useAsync } from "../hooks/useAsync";
@@ -53,6 +55,9 @@ export function SetupPage() {
   const [active, setActive] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [needClaim, setNeedClaim] = useState(false);
+  const [enroll, setEnroll] = useState<{ challengeToken: string; enrollmentUri: string } | null>(null);
+  const [otp, setOtp] = useState("");
+  const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const form = useForm<FormValues>({
@@ -125,6 +130,12 @@ export function SetupPage() {
     setError(null);
     bootstrap(values.username, values.password, values.claimTicket || undefined)
       .then((res) => {
+        if (res.next === "claim_required" && res.enrollmentUri && res.challengeToken) {
+          // 认领票已受理：展示登记 URI，输入首枚 OTP 完成因子激活。
+          setEnroll({ challengeToken: res.challengeToken, enrollmentUri: res.enrollmentUri });
+          setError(null);
+          return;
+        }
         if (res.next && res.next !== "authenticated") {
           // 首个管理员仍须持认领票完成因子登记。
           setNeedClaim(true);
@@ -133,8 +144,14 @@ export function SetupPage() {
         }
         setActive(2);
       })
-      .catch(() => {
-        setError(t("setup.bootstrapFailed"));
+      .catch((err: unknown) => {
+        // 强认证装配后空库须持安装认领票：识别挑战错误转认领票录入。
+        if (err instanceof ApiError && err.code === "invalid_auth_challenge") {
+          setNeedClaim(true);
+          setError(t("setup.claimRequired"));
+          return;
+        }
+        setError(err instanceof ApiError ? err.message : t("setup.bootstrapFailed"));
       })
       .finally(() => {
         setSubmitting(false);
@@ -171,6 +188,7 @@ export function SetupPage() {
 
             {/* 第二步：创建管理员。 */}
             <Stepper.Step label={t("setup.stepAdmin")}>
+              {!enroll && !codes ? (
               <form onSubmit={handleSubmit}>
                 <Stack gap="sm" mt="md">
                   <Text c="dimmed" size="sm">
@@ -230,6 +248,52 @@ export function SetupPage() {
                   </Group>
                 </Stack>
               </form>
+              ) : null}
+              {enroll ? (
+                <Stack gap="sm" mt="md">
+                  <Text c="dimmed" size="sm">
+                    {t("auth.enrollUriHint")}
+                  </Text>
+                  <Code block>{enroll.enrollmentUri}</Code>
+                  {error ? (
+                    <Alert color="red" variant="light">
+                      {error}
+                    </Alert>
+                  ) : null}
+                  <TextInput
+                    label={t("auth.mfaCode")}
+                    withAsterisk
+                    value={otp}
+                    onChange={(e) => setOtp(e.currentTarget.value)}
+                  />
+                  <Button
+                    loading={submitting}
+                    disabled={!otp.trim()}
+                    onClick={() => {
+                      setSubmitting(true);
+                      setError(null);
+                      confirmMfaEnroll(enroll.challengeToken, otp.trim(), form.values.claimTicket || undefined)
+                        .then((res) => {
+                          setCodes(res.recoveryCodes);
+                          setEnroll(null);
+                        })
+                        .catch(() => setError(t("setup.enrollFailed")))
+                        .finally(() => setSubmitting(false));
+                    }}
+                  >
+                    {t("auth.confirmEnroll")}
+                  </Button>
+                </Stack>
+              ) : null}
+              {codes ? (
+                <Stack gap="sm" mt="md">
+                  <Text c="dimmed" size="sm">
+                    {t("auth.recoveryCodesHint")}
+                  </Text>
+                  <Code block>{codes.join("\n")}</Code>
+                  <Button onClick={() => setActive(2)}>{t("auth.codesSaved")}</Button>
+                </Stack>
+              ) : null}
             </Stepper.Step>
 
             {/* 第三步：完成。 */}

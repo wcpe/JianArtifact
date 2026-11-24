@@ -283,6 +283,7 @@ export const zh = {
     bootstrapUnavailableHint: "请等待实例状态就绪后再进行操作。",
     statusUnavailable: "暂时无法确认实例是否允许初始化，请稍后重试。",
     claimRequired: "该账号需持认领票完成因子登记后才能登录。请输入认领票再次提交。",
+    enrollFailed: "因子登记失败，请核对一次性口令后重试。",
     bootstrapFailed: "创建管理员失败，请检查后重试。",
   },
   dashboard: {
