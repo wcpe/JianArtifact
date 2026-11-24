@@ -75,11 +75,35 @@ func TestAdmissionDecisionEndToEnd(t *testing.T) {
 		}
 		return op
 	}
-	decide := func(op, action, credential string, want int) string {
+	preview := func(op, action, credential string, want int) string {
 		t.Helper()
 		status, _, body := auditTestRequest(t, server, http.MethodPost,
-			"/api/v1/security/admission/candidates/"+op+"/decisions", "application/json",
+			"/api/v1/security/admission/candidates/"+op+"/decisions/preview", "application/json",
 			fmt.Sprintf(`{"action":%q,"reason":%q}`, action, "复核通过"), credential)
+		if status != want {
+			t.Fatalf("预览 %s 返回 %d，期望 %d：%s", action, status, want, body)
+		}
+		return body
+	}
+	tokenOf := func(body string) string {
+		t.Helper()
+		tok := queryDecode[struct {
+			Token *string `json:"confirmationToken"`
+		}](t, body).Token
+		if tok == nil {
+			return ""
+		}
+		return *tok
+	}
+	decide := func(op, action, credential string, want int) string {
+		t.Helper()
+		var confirm string
+		if want == http.StatusOK {
+			confirm = tokenOf(preview(op, action, credential, http.StatusOK))
+		}
+		status, _, body := auditTestRequest(t, server, http.MethodPost,
+			"/api/v1/security/admission/candidates/"+op+"/decisions", "application/json",
+			fmt.Sprintf(`{"action":%q,"reason":%q,"confirmationToken":%q}`, action, "复核通过", confirm), credential)
 		if status != want {
 			t.Fatalf("裁决 %s 返回 %d，期望 %d：%s", action, status, want, body)
 		}
@@ -139,6 +163,41 @@ func TestAdmissionDecisionEndToEnd(t *testing.T) {
 	}
 	download("rejected.txt", http.StatusNotFound)
 	decide(rejected, "approve", adminToken, http.StatusConflict)
+
+	// FR-170 确认令牌：伪造令牌 409 security_confirmation_stale；已用令牌重放同 409。
+	stale := prepare("stale.txt", "伪造令牌字节")
+	if st := state(stale, ownerToken); st != "awaiting_review" {
+		t.Fatalf("伪造令牌用例候选应待审：%s", st)
+	}
+	status, _, staleBody := auditTestRequest(t, server, http.MethodPost,
+		"/api/v1/security/admission/candidates/"+stale+"/decisions", "application/json",
+		`{"action":"approve","reason":"复核","confirmationToken":"forged.token"}`, adminToken)
+	if status != http.StatusConflict {
+		t.Fatalf("伪造令牌应 409：%d %s", status, staleBody)
+	}
+	previewBody := preview(stale, "approve", adminToken, http.StatusOK)
+	liveToken := tokenOf(previewBody)
+	if liveToken == "" {
+		t.Fatal("预览未签发确认令牌")
+	}
+	status, _, staleBody = auditTestRequest(t, server, http.MethodPost,
+		"/api/v1/security/admission/candidates/"+stale+"/decisions", "application/json",
+		fmt.Sprintf(`{"action":"reject","reason":"复核","confirmationToken":%q}`, liveToken), adminToken)
+	if status != http.StatusConflict {
+		t.Fatalf("动作绑定的令牌用于其他动作应 409：%d %s", status, staleBody)
+	}
+	status, _, _ = auditTestRequest(t, server, http.MethodPost,
+		"/api/v1/security/admission/candidates/"+stale+"/decisions", "application/json",
+		fmt.Sprintf(`{"action":"approve","reason":"复核","confirmationToken":%q}`, liveToken), adminToken)
+	if status != http.StatusOK {
+		t.Fatalf("有效令牌裁决应 200：%d %s", status, staleBody)
+	}
+	status, _, staleBody = auditTestRequest(t, server, http.MethodPost,
+		"/api/v1/security/admission/candidates/"+stale+"/decisions", "application/json",
+		fmt.Sprintf(`{"action":"approve","reason":"复核","confirmationToken":%q}`, liveToken), adminToken)
+	if status != http.StatusConflict {
+		t.Fatalf("已用令牌重放应 409：%d %s", status, staleBody)
+	}
 
 	// 不存在的操作号统一 404。
 	decide("00000000-0000-4000-8000-000000000000", "approve", adminToken, http.StatusNotFound)

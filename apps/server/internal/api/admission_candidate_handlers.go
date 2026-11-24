@@ -84,11 +84,13 @@ func (h *Handlers) DecidePrivateAdmissionCandidate(c *gin.Context, operationID P
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "请求体无效")
 		return
 	}
-	status, err := h.admission.Decide(c.Request.Context(), p, operationID, string(req.Action), req.Reason)
+	status, err := h.admission.Decide(c.Request.Context(), p, operationID, string(req.Action), req.Reason, req.ConfirmationToken)
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrAdmissionDecisionRejected):
 			auth.WriteError(c, http.StatusConflict, "admission_decision_conflict", "候选不在待审状态")
+		case errors.Is(err, domain.ErrConfirmationStale):
+			auth.WriteError(c, http.StatusConflict, "security_confirmation_stale", "确认令牌无效或已失效")
 		case errors.Is(err, domain.ErrValidation):
 			auth.WriteError(c, http.StatusBadRequest, "bad_request", "裁决参数无效")
 		default:
@@ -104,6 +106,45 @@ func (h *Handlers) DecidePrivateAdmissionCandidate(c *gin.Context, operationID P
 	}
 	if status.PublishedAssetID != nil {
 		out.PublishedAssetId = status.PublishedAssetID
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// PreviewPrivateAdmissionDecision 预览裁决可行性并签发短效单次确认令牌（FR-170）；预览不改候选。
+func (h *Handlers) PreviewPrivateAdmissionDecision(c *gin.Context, operationID PrivateAdmissionOperationIdParam) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok {
+		return
+	}
+	if h.admission == nil {
+		writeAdmissionError(c, domain.ErrAdmissionUnavailable)
+		return
+	}
+	if !h.requireRecentMfa(c, p) {
+		return
+	}
+	var req PrivateAdmissionDecisionPreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "请求体无效")
+		return
+	}
+	preview, err := h.admission.DecidePreview(c.Request.Context(), p, operationID, string(req.Action), req.Reason)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrValidation):
+			auth.WriteError(c, http.StatusBadRequest, "bad_request", "预览参数无效")
+		case errors.Is(err, repository.ErrNotFound):
+			auth.WriteError(c, http.StatusNotFound, "admission_not_found", "候选不存在")
+		default:
+			writeAdmissionError(c, err)
+		}
+		return
+	}
+	out := PrivateAdmissionDecisionPreviewResponse{Feasible: preview.Feasible, Blockers: preview.Blockers}
+	if preview.Token != "" {
+		out.ConfirmationToken = &preview.Token
+		out.ExpiresAt = &preview.Expires
 	}
 	c.JSON(http.StatusOK, out)
 }

@@ -2,8 +2,10 @@ package domain
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +49,8 @@ var (
 	ErrAdmissionUnavailable     = errors.New("候选状态暂不可确认")
 	// ErrAdmissionLimit 私有暂存超出容量或条数上限；映射 413 admission_limit。
 	ErrAdmissionLimit = errors.New("私有暂存容量已满")
+	// ErrConfirmationStale 确认令牌伪造、过期、重放或绑定漂移（FR-170）。
+	ErrConfirmationStale = errors.New("确认令牌无效或已失效")
 )
 
 // AdmissionStatus 是公开状态适配器可使用的脱敏投影，不含内部文件键、源 IP 或路径。
@@ -68,6 +72,7 @@ type AdmissionStatus struct {
 type AdmissionService struct {
 	rows         *repository.AdmissionCandidateRepo
 	jobs         *repository.AdmissionScanJobRepo
+	confirmKey   []byte
 	repos        *repository.RepoRepo
 	users        *repository.UserRepo
 	events       *repository.SecurityEventRepo
@@ -84,7 +89,11 @@ type AdmissionService struct {
 func (s *AdmissionService) SetAssetService(assets *AssetService) { s.assets = assets }
 
 func NewAdmissionService(db *persistence.DB, blobs *blobstore.Store, users *repository.UserRepo, repos *repository.RepoRepo, freeze *FreezeController) *AdmissionService {
-	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), jobs: repository.NewAdmissionScanJobRepo(), users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
+	ck := make([]byte, 32)
+	if _, err := rand.Read(ck); err != nil {
+		panic(err)
+	}
+	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), jobs: repository.NewAdmissionScanJobRepo(), confirmKey: ck, users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
 }
 
 // Prepare 接收内部调用方交来的已验证会话和 HTTP 来源。registered 只在确认登记后通知操作号，
@@ -612,7 +621,92 @@ var ErrAdmissionDecisionRejected = errors.New("准入裁决被拒")
 
 // Decide 管理员处置候选：awaiting_review → approve（提升字节为公开资产）或 reject。
 // reason 必填；批准在最终事务内先复核仓库与权限，再把状态与资产引用同事务裁决。
-func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operationID, action, reason string) (AdmissionStatus, error) {
+const admissionConfirmTTL = 5 * time.Minute
+
+// AdmissionDecisionPreview 裁决预览结果：可行性、阻塞项与短效单次确认令牌。
+type AdmissionDecisionPreview struct {
+	Feasible bool
+	Blockers []string
+	Token    string
+	Expires  time.Time
+}
+
+// DecidePreview 核验待审状态并签发绑定主体/动作/版本/摘要/规则与有效期的确认令牌；预览不改候选。
+func (s *AdmissionService) DecidePreview(ctx context.Context, p *auth.Principal, operationID, action, reason string) (AdmissionDecisionPreview, error) {
+	out := AdmissionDecisionPreview{Blockers: []string{}}
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return out, ErrAdmissionForbidden
+	}
+	if reason == "" || (action != "approve" && action != "reject") {
+		return out, ErrValidation
+	}
+	var row repository.AdmissionCandidateRow
+	err := s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+		r, e := s.rows.GetAnyTx(ctx, tx, operationID)
+		if e != nil {
+			return e
+		}
+		row = r
+		return nil
+	})
+	if err != nil {
+		return out, repository.ErrNotFound
+	}
+	feasible := row.State == "awaiting_review" && row.ManifestDigest != nil && row.BlobHash != nil && row.SizeBytes != nil
+	if !feasible {
+		out.Blockers = append(out.Blockers, "candidate_not_awaiting_review")
+		return out, nil
+	}
+	expires := time.Now().UTC().Add(admissionConfirmTTL)
+	payload := fmt.Sprintf("%d|%s|%s|%d|%s|%s|%d", p.UserID, operationID, action, row.TargetVersion, *row.ManifestDigest, admissionScanRulesVersion, expires.Unix())
+	sig := hmac.New(sha256.New, s.confirmKey)
+	sig.Write([]byte(payload))
+	out.Feasible = true
+	out.Token = base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + base64.RawURLEncoding.EncodeToString(sig.Sum(nil))
+	out.Expires = expires
+	return out, nil
+}
+
+// verifyConfirmToken 验签并比对绑定字段；返回单次令牌 ID（payload 整体）。
+func (s *AdmissionService) verifyConfirmToken(p *auth.Principal, operationID, action string, row repository.AdmissionCandidateRow, token string) (string, error) {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return "", ErrConfirmationStale
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", ErrConfirmationStale
+	}
+	sigBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", ErrConfirmationStale
+	}
+	sig := hmac.New(sha256.New, s.confirmKey)
+	sig.Write(raw)
+	if !hmac.Equal(sig.Sum(nil), sigBytes) {
+		return "", ErrConfirmationStale
+	}
+	fields := strings.Split(string(raw), "|")
+	if len(fields) != 7 {
+		return "", ErrConfirmationStale
+	}
+	uid, e1 := strconv.ParseInt(fields[0], 10, 64)
+	tv, e2 := strconv.ParseInt(fields[3], 10, 64)
+	exp, e3 := strconv.ParseInt(fields[6], 10, 64)
+	if e1 != nil || e2 != nil || e3 != nil {
+		return "", ErrConfirmationStale
+	}
+	op, act, md, rv := fields[1], fields[2], fields[4], fields[5]
+	if uid != p.UserID || op != operationID || act != action || time.Now().Unix() >= exp {
+		return "", ErrConfirmationStale
+	}
+	if row.ManifestDigest == nil || md != *row.ManifestDigest || tv != row.TargetVersion || rv != admissionScanRulesVersion {
+		return "", ErrConfirmationStale
+	}
+	return parts[0], nil
+}
+
+func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operationID, action, reason, confirmToken string) (AdmissionStatus, error) {
 	if p == nil || p.UserID <= 0 || p.Role != "admin" {
 		return AdmissionStatus{}, ErrAdmissionForbidden
 	}
@@ -636,6 +730,26 @@ func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operat
 	}
 	if row.BlobHash == nil || row.SizeBytes == nil {
 		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	// FR-170：确认令牌绑定主体/动作/版本/摘要/规则/有效期，登记单次消费后才允许推进。
+	tokenID, err := s.verifyConfirmToken(p, operationID, action, row, confirmToken)
+	if err != nil {
+		return AdmissionStatus{}, err
+	}
+	consumed := false
+	err = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+		ok, e := s.jobs.ConsumeConfirmationTx(ctx, tx, tokenID, time.Now().UTC())
+		if e != nil {
+			return e
+		}
+		consumed = ok
+		return nil
+	}, s.commitWhenWritable)
+	if err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	if !consumed {
+		return AdmissionStatus{}, ErrConfirmationStale // 重放
 	}
 	if action == "reject" {
 		return s.transitionStatusAdmin(ctx, row, "rejected", "manual_reject")

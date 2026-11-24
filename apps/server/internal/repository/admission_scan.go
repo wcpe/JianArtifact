@@ -158,3 +158,13 @@ func (r *AdmissionScanJobRepo) CountFactsTx(ctx context.Context, tx *sqlx.Tx, jo
 	var n int64
 	return n, tx.GetContext(ctx, &n, `SELECT COUNT(*) FROM admission_scan_fact WHERE job_id=?`, jobID)
 }
+
+// ConsumeConfirmationTx 把确认令牌登记为已用；重复消费返回 false（不重放）。
+func (r *AdmissionScanJobRepo) ConsumeConfirmationTx(ctx context.Context, tx *sqlx.Tx, tokenID string, now time.Time) (bool, error) {
+	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO admission_confirmation_token (token_id, used_unix) VALUES (?, ?)`, tokenID, now.Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}

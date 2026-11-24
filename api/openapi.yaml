@@ -1170,6 +1170,41 @@ paths:
           $ref: "#/components/responses/PrivateAdmissionNotFound"
         "503":
           $ref: "#/components/responses/PrivateAdmissionUnavailable"
+  /api/v1/security/admission/candidates/{operationId}/decisions/preview:
+    post:
+      operationId: previewPrivateAdmissionDecision
+      summary: 预览候选裁决可行性并签发短效确认令牌
+      description: |
+        仅管理员且经近期强认证复核可调用；预览不改变候选。返回可行性、阻塞原因及短效单次
+        `confirmationToken`；令牌绑定主体、动作、目标版本、清单摘要、规则版本与有效期，
+        实际裁决须回传同一令牌，重放或绑定失效返回 409 `security_confirmation_stale`。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PrivateAdmissionOperationIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrivateAdmissionDecisionPreviewRequest"
+      responses:
+        "200":
+          description: 预览结果与确认令牌
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateAdmissionDecisionPreviewResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "503":
+          $ref: "#/components/responses/PrivateAdmissionUnavailable"
   /api/v1/security/admission/candidates/{operationId}/decisions:
     post:
       operationId: decidePrivateAdmissionCandidate
@@ -4743,7 +4778,7 @@ components:
     PrivateAdmissionDecisionRequest:
       type: object
       additionalProperties: false
-      required: [action, reason]
+      required: [action, reason, confirmationToken]
       properties:
         action:
           type: string
@@ -4753,6 +4788,38 @@ components:
           type: string
           minLength: 1
           maxLength: 512
+        confirmationToken:
+          type: string
+          minLength: 1
+          description: 同一主体经 preview 取得的短效单次确认令牌（FR-170）；令牌绑定人、动作、版本、摘要、规则与有效期。
+    PrivateAdmissionDecisionPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    PrivateAdmissionDecisionPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [feasible, blockers]
+      properties:
+        feasible:
+          type: boolean
+        blockers:
+          type: array
+          items:
+            type: string
+        confirmationToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
           description: 处置原因，写入裁决事实。
     SecurityAuditEventType:
       type: string

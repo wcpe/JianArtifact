@@ -1184,18 +1184,36 @@ func (e PrivateAdmissionCandidateStatusState) Valid() bool {
 	}
 }
 
+// Defines values for PrivateAdmissionDecisionPreviewRequestAction.
+const (
+	PrivateAdmissionDecisionPreviewRequestActionApprove PrivateAdmissionDecisionPreviewRequestAction = "approve"
+	PrivateAdmissionDecisionPreviewRequestActionReject  PrivateAdmissionDecisionPreviewRequestAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionDecisionPreviewRequestAction enum.
+func (e PrivateAdmissionDecisionPreviewRequestAction) Valid() bool {
+	switch e {
+	case PrivateAdmissionDecisionPreviewRequestActionApprove:
+		return true
+	case PrivateAdmissionDecisionPreviewRequestActionReject:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PrivateAdmissionDecisionRequestAction.
 const (
-	Approve PrivateAdmissionDecisionRequestAction = "approve"
-	Reject  PrivateAdmissionDecisionRequestAction = "reject"
+	PrivateAdmissionDecisionRequestActionApprove PrivateAdmissionDecisionRequestAction = "approve"
+	PrivateAdmissionDecisionRequestActionReject  PrivateAdmissionDecisionRequestAction = "reject"
 )
 
 // Valid indicates whether the value is a known member of the PrivateAdmissionDecisionRequestAction enum.
 func (e PrivateAdmissionDecisionRequestAction) Valid() bool {
 	switch e {
-	case Approve:
+	case PrivateAdmissionDecisionRequestActionApprove:
 		return true
-	case Reject:
+	case PrivateAdmissionDecisionRequestActionReject:
 		return true
 	default:
 		return false
@@ -4016,13 +4034,33 @@ type PrivateAdmissionCandidateStatusErrorCode string
 // PrivateAdmissionCandidateStatusState 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
 type PrivateAdmissionCandidateStatusState string
 
+// PrivateAdmissionDecisionPreviewRequest defines model for PrivateAdmissionDecisionPreviewRequest.
+type PrivateAdmissionDecisionPreviewRequest struct {
+	Action PrivateAdmissionDecisionPreviewRequestAction `json:"action"`
+	Reason string                                       `json:"reason"`
+}
+
+// PrivateAdmissionDecisionPreviewRequestAction defines model for PrivateAdmissionDecisionPreviewRequest.Action.
+type PrivateAdmissionDecisionPreviewRequestAction string
+
+// PrivateAdmissionDecisionPreviewResponse defines model for PrivateAdmissionDecisionPreviewResponse.
+type PrivateAdmissionDecisionPreviewResponse struct {
+	Blockers          []string `json:"blockers"`
+	ConfirmationToken *string  `json:"confirmationToken,omitempty"`
+
+	// ExpiresAt 处置原因，写入裁决事实。
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	Feasible  bool       `json:"feasible"`
+}
+
 // PrivateAdmissionDecisionRequest defines model for PrivateAdmissionDecisionRequest.
 type PrivateAdmissionDecisionRequest struct {
 	// Action 批准提升为公开资产或驳回候选。
 	Action PrivateAdmissionDecisionRequestAction `json:"action"`
 
-	// Reason 处置原因，写入裁决事实。
-	Reason string `json:"reason"`
+	// ConfirmationToken 同一主体经 preview 取得的短效单次确认令牌（FR-170）；令牌绑定人、动作、版本、摘要、规则与有效期。
+	ConfirmationToken string `json:"confirmationToken"`
+	Reason            string `json:"reason"`
 }
 
 // PrivateAdmissionDecisionRequestAction 批准提升为公开资产或驳回候选。
@@ -5651,6 +5689,9 @@ type ExecuteSecurityActionJSONRequestBody = SecurityActionExecuteRequest
 // DecidePrivateAdmissionCandidateJSONRequestBody defines body for DecidePrivateAdmissionCandidate for application/json ContentType.
 type DecidePrivateAdmissionCandidateJSONRequestBody = PrivateAdmissionDecisionRequest
 
+// PreviewPrivateAdmissionDecisionJSONRequestBody defines body for PreviewPrivateAdmissionDecision for application/json ContentType.
+type PreviewPrivateAdmissionDecisionJSONRequestBody = PrivateAdmissionDecisionPreviewRequest
+
 // BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
 type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
 
@@ -6266,6 +6307,9 @@ type ServerInterface interface {
 	// DecidePrivateAdmissionCandidate 管理员裁决待审私有候选
 	// (POST /api/v1/security/admission/candidates/{operationId}/decisions)
 	DecidePrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// PreviewPrivateAdmissionDecision 预览候选裁决可行性并签发短效确认令牌
+	// (POST /api/v1/security/admission/candidates/{operationId}/decisions/preview)
+	PreviewPrivateAdmissionDecision(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
 	// ListEvidenceHolds 保全持有清单（管理员只读）
 	// (GET /api/v1/security/holds)
 	ListEvidenceHolds(c *gin.Context)
@@ -9210,6 +9254,31 @@ func (siw *ServerInterfaceWrapper) DecidePrivateAdmissionCandidate(c *gin.Contex
 	siw.Handler.DecidePrivateAdmissionCandidate(c, operationId)
 }
 
+// PreviewPrivateAdmissionDecision operation middleware
+func (siw *ServerInterfaceWrapper) PreviewPrivateAdmissionDecision(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "operationId" -------------
+	var operationId PrivateAdmissionOperationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "operationId", c.Param("operationId"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PreviewPrivateAdmissionDecision(c, operationId)
+}
+
 // ListEvidenceHolds operation middleware
 func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
 
@@ -9900,6 +9969,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
+	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions/preview", wrapper.PreviewPrivateAdmissionDecision)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions", wrapper.DecidePrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
 	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies", wrapper.PutPublishPolicies)
