@@ -33,7 +33,7 @@
 | FR-158                                     | [`0.13.0-upstream-failure-classification.md`](0.13.0-upstream-failure-classification.md) | 回源失败原因五分类                                                 | 开发完成，待用户验收 |
 | FR-159                                     | [`0.13.0-upstream-health-history.md`](0.13.0-upstream-health-history.md)                 | 上游健康历史                                                       | 开发完成，待用户验收 |
 | FR-160 / FR-161 / FR-162 / FR-163 / FR-164 | [`0.13.0-maintenance-cleanup-console.md`](0.13.0-maintenance-cleanup-console.md)         | 维护与清理控制台（存储体检 / 任务队列 / 定向清理 / 页面 / 回收站） | 开发完成，待用户验收 |
-| FR-165 / FR-166                            | [`0.14.0-maven-version-trash.md`](0.14.0-maven-version-trash.md)                         | Maven 版本级清理与资产回收站 / 跨仓同坐标诊断                      | 开发完成，待用户验收 |
+| FR-175 / FR-176                            | [`0.14.0-maven-version-trash.md`](0.14.0-maven-version-trash.md)                         | Maven 版本级清理与资产回收站 / 跨仓同坐标诊断                      | 开发完成，待用户验收 |
 
 > 同窗口另含一条**不单列 FR 的缺陷修正**（FIX-1）：group 读路径把不可判定失败折叠成 404 —— 现按 `ResolveFailure` 分流为 `Confirmed→404` / `含超时→504` / `其余不可判定→502`。该条属 FR-110 已交付实现的归真，只记 CHANGELOG 与 PRD 括注，理由见 [`0.13.0-group-two-phase-budget.md`](0.13.0-group-two-phase-budget.md) §2.3。
 

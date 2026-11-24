@@ -245,7 +245,6 @@ func (c *AssetMutationCoordinator) applyLockedInternal(items []repository.AssetM
 			return id, c.rollbackUnrecordedStaging(id, entries, err)
 		}
 	}
-	}
 	if err := c.mutations.MarkStaged(id, quarantineRecords(entries)); err != nil {
 		if errors.Is(err, repository.ErrAssetMutationTransition) {
 			return id, errors.Join(errAssetRecoveryPending, err)
