@@ -33,6 +33,12 @@ const (
 	admissionMaxTotalPendingBytes int64 = 32 << 30
 	admissionMaxRepoPendingCount  int64 = 256
 	admissionMaxTotalPendingCount int64 = 4096
+	// FR-170 扫描任务：内置完整性检测版本号与租约。
+	admissionScanEngine        = "builtin-integrity"
+	admissionScanEngineVersion = "1"
+	admissionScanRulesVersion  = "1"
+	admissionScanParserProfile = "generic/1"
+	admissionScanLease         = 60 * time.Second
 )
 
 var (
@@ -61,6 +67,7 @@ type AdmissionStatus struct {
 // AdmissionService 登记和追踪私有候选；批准后把字节提升为公开资产（FR-169）。
 type AdmissionService struct {
 	rows         *repository.AdmissionCandidateRepo
+	jobs         *repository.AdmissionScanJobRepo
 	repos        *repository.RepoRepo
 	users        *repository.UserRepo
 	events       *repository.SecurityEventRepo
@@ -77,7 +84,7 @@ type AdmissionService struct {
 func (s *AdmissionService) SetAssetService(assets *AssetService) { s.assets = assets }
 
 func NewAdmissionService(db *persistence.DB, blobs *blobstore.Store, users *repository.UserRepo, repos *repository.RepoRepo, freeze *FreezeController) *AdmissionService {
-	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
+	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), jobs: repository.NewAdmissionScanJobRepo(), users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
 }
 
 // Prepare 接收内部调用方交来的已验证会话和 HTTP 来源。registered 只在确认登记后通知操作号，
@@ -238,35 +245,118 @@ func (s *AdmissionService) Status(ctx context.Context, principal *auth.Principal
 			row.ManifestDigest == nil || *row.ManifestDigest != admissionManifestDigest(row, repo.Format, *row.BlobHash, *row.SizeBytes) {
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
-		select {
-		case s.verification <- struct{}{}:
-			defer func() { <-s.verification }()
-		default:
-			return AdmissionStatus{}, ErrAdmissionUnavailable
-		}
-		err := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes)
-		if errors.Is(err, blobstore.ErrPrivateCandidateIntegrity) {
-			return s.transitionStatus(ctx, principal, row, "rejected", admissionIntegrityFailed)
-		}
-		if err != nil {
-			return AdmissionStatus{}, ErrAdmissionUnavailable
-		}
-		if time.Now().Unix() >= row.ExpiresUnix {
-			return s.transitionStatus(ctx, principal, row, "expired", "")
-		}
-		// 文件 I/O 完成后再次核验当前会话、归属、仓库及 ACL。
-		latest, err := s.authorizedRow(ctx, principal, operationID)
+		// FR-170：检测经持久 scan_job 认领；租约带递增代次与墙钟。
+		workerID := "main-" + s.bootID
+		var job repository.AdmissionScanJobRow
+		var claimed bool
+		now := time.Now().UTC()
+		err = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+			latest, e := s.authorizedRowTx(ctx, tx, principal, operationID)
+			if e != nil || latest.State != "staged" || latest.TargetVersion != row.TargetVersion {
+				return ErrAdmissionUnavailable
+			}
+			if _, e = s.jobs.EnqueueTx(ctx, tx, repository.AdmissionScanJobRow{
+				JobID: uuid.NewString(), OperationID: operationID, ManifestVersion: *row.ManifestVersion,
+				Engine: admissionScanEngine, EngineVersion: admissionScanEngineVersion,
+				RulesVersion: admissionScanRulesVersion, ParserProfileVersion: admissionScanParserProfile,
+				NextRunAtUnix: now.Unix(), CreatedUnix: now.Unix(), UpdatedUnix: now.Unix(),
+			}); e != nil {
+				return e
+			}
+			var e2 error
+			job, claimed, e2 = s.jobs.ClaimTx(ctx, tx, operationID, *row.ManifestVersion, workerID, admissionScanLease, now)
+			return e2
+		}, s.commitWhenWritable)
 		if err != nil {
 			return AdmissionStatus{}, admissionServiceError(err)
 		}
-		if latest.TargetVersion != row.TargetVersion {
+		if !claimed {
+			// 他人持有有效租约或尝试预算耗尽：无公开结果。
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
-		// 完整性裁定通过 → 转待审，批准才是发布（FR-169）。
-		if latest.State == "staged" {
-			return s.transitionStatus(ctx, principal, latest, "awaiting_review", "")
+		select {
+		case s.verification <- struct{}{}:
+		default:
+			_ = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+				_, e := s.jobs.RequeueTx(ctx, tx, job.JobID, job.LeaseGeneration, time.Now().UTC().Add(5*time.Second), "scan_busy", time.Now().UTC())
+				return e
+			}, s.commitWhenWritable)
+			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
-		return admissionStatus(latest), nil
+		verifyErr := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes)
+		<-s.verification
+		// 完成事务：租约代次栅栏 + 事实追加 + 候选转态（FR-170 §3.2）。
+		verdict, integrity, errCode := "approved", "passed", ""
+		switch {
+		case errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity):
+			verdict, integrity, errCode = "rejected", "failed", admissionIntegrityFailed
+		case verifyErr != nil:
+			verdict, integrity = "", "unknown" // 可重试故障退回 queued
+		case time.Now().Unix() >= row.ExpiresUnix:
+			verdict = "" // 到期走候选 expired 路径
+		}
+		var outcome AdmissionStatus
+		werr := s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+			if integrity != "unknown" {
+				factOrdinal, e := s.jobs.CountFactsTx(ctx, tx, job.JobID)
+				if e != nil {
+					return e
+				}
+				completed, missing := int64(1), "[]"
+				if integrity != "passed" {
+					completed, missing = 0, `["integrity"]`
+				}
+				fv := verdict
+				if fv == "" {
+					fv = "rejected"
+				}
+				if e = s.jobs.InsertFactTx(ctx, tx, repository.AdmissionScanFactRow{
+					JobID: job.JobID, Ordinal: factOrdinal + 1, LeaseGeneration: job.LeaseGeneration,
+					ObjectDigest: *row.BlobHash, CoverageRequired: 1,
+					CoverageCompleted: completed, CoverageMissing: missing, Integrity: integrity,
+					Verdict: fv, Findings: "[]", WorkerID: workerID, ObservedAtUnix: time.Now().UTC().Unix(),
+				}); e != nil {
+					return e
+				}
+			}
+			if verdict == "" {
+				// 可重试故障或到期：退回队列（到期由下方候选转态处理）。
+				ok, e := s.jobs.RequeueTx(ctx, tx, job.JobID, job.LeaseGeneration, time.Now().UTC(), "retryable", time.Now().UTC())
+				if e != nil {
+					return e
+				}
+				if !ok {
+					return ErrAdmissionUnavailable // 代次不匹配：迟到结果不生效
+				}
+				return nil
+			}
+			ok, e := s.jobs.CompleteTx(ctx, tx, job.JobID, job.LeaseGeneration, verdict, errCode, time.Now().UTC())
+			if e != nil {
+				return e
+			}
+			if !ok {
+				return ErrAdmissionUnavailable // 租约被接管：本次结果作废
+			}
+			if verdict == "rejected" {
+				outcome, e = s.transitionStatusTx(ctx, tx, principal, row, "rejected", admissionIntegrityFailed)
+				return e
+			}
+			outcome, e = s.transitionStatusTx(ctx, tx, principal, row, "awaiting_review", "")
+			return e
+		}, s.commitWhenWritable)
+		if werr != nil {
+			if verifyErr != nil && !errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity) {
+				return AdmissionStatus{}, ErrAdmissionUnavailable
+			}
+			return AdmissionStatus{}, admissionServiceError(werr)
+		}
+		if verifyErr != nil && !errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity) {
+			return AdmissionStatus{}, ErrAdmissionUnavailable
+		}
+		if time.Now().Unix() >= row.ExpiresUnix && verdict == "" {
+			return s.transitionStatus(ctx, principal, row, "expired", "")
+		}
+		return outcome, nil
 	case "awaiting_review":
 		if time.Now().Unix() >= row.ExpiresUnix {
 			return s.transitionStatus(ctx, principal, row, "expired", "")
@@ -377,6 +467,22 @@ func (s *AdmissionService) transitionStatus(ctx context.Context, p *auth.Princip
 	}
 	if err != nil {
 		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	row.State, row.ErrorCode, row.TargetVersion = state, code, row.TargetVersion+1
+	return admissionStatus(row), nil
+}
+
+// transitionStatusTx 在既有写事务内复核归属/版本/当前态后转态（FR-170 扫描完成同事务）。
+func (s *AdmissionService) transitionStatusTx(ctx context.Context, tx *sqlx.Tx, p *auth.Principal, row repository.AdmissionCandidateRow, state, code string) (AdmissionStatus, error) {
+	current, err := s.authorizedRowTx(ctx, tx, p, row.OperationID)
+	if err != nil {
+		return AdmissionStatus{}, err
+	}
+	if current.RepositoryID != row.RepositoryID || current.TargetVersion != row.TargetVersion || current.State != row.State {
+		return AdmissionStatus{}, repository.ErrNotFound
+	}
+	if err := s.rows.TransitionTx(ctx, tx, row, state, code); err != nil {
+		return AdmissionStatus{}, err
 	}
 	row.State, row.ErrorCode, row.TargetVersion = state, code, row.TargetVersion+1
 	return admissionStatus(row), nil

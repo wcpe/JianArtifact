@@ -633,3 +633,54 @@ func TestPyPIUploadViaAdmissionEndToEnd(t *testing.T) {
 		t.Fatalf("PyPI 候选应提升为 published：%s", state)
 	}
 }
+
+// TestAdmissionScanJobPersistence 准入裁定须持久化为 scan_job + scan_fact：
+// job 携带引擎/规则版本、租约代次≥1、attempts 有界；fact 记录对象摘要与完整性判定。
+func TestAdmissionScanJobPersistence(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "raw")
+	if _, _, err := app.authSvc.Bootstrap("scan-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("scan-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("scan-hosted", "raw", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "scan-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, body := auditTestRequest(t, server, http.MethodPut, "/repository/"+repo.Name+"/s1.txt", "text/plain", "扫描对象字节", issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("准入 PUT 应 201：%d %s", status, body)
+	}
+	var jobID, jstate, verdict, engine string
+	var leaseGen, attempts int64
+	if err := app.db.QueryRow(`SELECT job_id,state,verdict,engine,lease_generation,attempts FROM admission_scan_job ORDER BY rowid DESC LIMIT 1`).
+		Scan(&jobID, &jstate, &verdict, &engine, &leaseGen, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if jstate != "completed" || verdict != "approved" || engine == "" || leaseGen < 1 || attempts != 1 {
+		t.Fatalf("扫描任务终态不符：state=%s verdict=%s gen=%d attempts=%d", jstate, verdict, leaseGen, attempts)
+	}
+	var factIntegrity, factVerdict, factDigest string
+	var factOrdinal int64
+	if err := app.db.QueryRow(`SELECT ordinal,integrity,verdict,object_digest FROM admission_scan_fact WHERE job_id=?`, jobID).
+		Scan(&factOrdinal, &factIntegrity, &factVerdict, &factDigest); err != nil {
+		t.Fatal(err)
+	}
+	if factOrdinal != 1 || factIntegrity != "passed" || factVerdict != "approved" || factDigest == "" {
+		t.Fatalf("扫描事实不符：ordinal=%d integrity=%s verdict=%s", factOrdinal, factIntegrity, factVerdict)
+	}
+}
