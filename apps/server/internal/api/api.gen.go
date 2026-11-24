@@ -115,19 +115,19 @@ func (e AssetOperationTargetType) Valid() bool {
 
 // Defines values for AssetTrashEntryScope.
 const (
-	Artifact      AssetTrashEntryScope = "artifact"
-	SnapshotBuild AssetTrashEntryScope = "snapshot_build"
-	Version       AssetTrashEntryScope = "version"
+	AssetTrashEntryScopeArtifact      AssetTrashEntryScope = "artifact"
+	AssetTrashEntryScopeSnapshotBuild AssetTrashEntryScope = "snapshot_build"
+	AssetTrashEntryScopeVersion       AssetTrashEntryScope = "version"
 )
 
 // Valid indicates whether the value is a known member of the AssetTrashEntryScope enum.
 func (e AssetTrashEntryScope) Valid() bool {
 	switch e {
-	case Artifact:
+	case AssetTrashEntryScopeArtifact:
 		return true
-	case SnapshotBuild:
+	case AssetTrashEntryScopeSnapshotBuild:
 		return true
-	case Version:
+	case AssetTrashEntryScopeVersion:
 		return true
 	default:
 		return false
@@ -136,19 +136,19 @@ func (e AssetTrashEntryScope) Valid() bool {
 
 // Defines values for AssetTrashEntryStatus.
 const (
-	Purged   AssetTrashEntryStatus = "purged"
-	Restored AssetTrashEntryStatus = "restored"
-	Staged   AssetTrashEntryStatus = "staged"
+	AssetTrashStatusPurged   AssetTrashEntryStatus = "purged"
+	AssetTrashStatusRestored AssetTrashEntryStatus = "restored"
+	AssetTrashStatusStaged   AssetTrashEntryStatus = "staged"
 )
 
 // Valid indicates whether the value is a known member of the AssetTrashEntryStatus enum.
 func (e AssetTrashEntryStatus) Valid() bool {
 	switch e {
-	case Purged:
+	case AssetTrashStatusPurged:
 		return true
-	case Restored:
+	case AssetTrashStatusRestored:
 		return true
-	case Staged:
+	case AssetTrashStatusStaged:
 		return true
 	default:
 		return false
