@@ -360,8 +360,9 @@ func resolveQuerySettings(parsed *queryArgs, env queryEnv) (querySettings, error
 	}
 	// 配置文件里的令牌只属于该文件登记的那台服务端：用 --server / JIAN_SERVER
 	// 指向另一实例时不得沿用，否则会把凭据交给第三方实例（含恶意基址）。
+	// 比较前剥掉协议默认端口：https://h 与 https://h:443 是同一实例。
 	if !tokenFromFlagOrEnv && cfg.Token != "" && cfg.Server != "" {
-		if cfgBase, e := normalizeQueryServer(cfg.Server); e == nil && cfgBase.String() != base.String() {
+		if cfgBase, e := normalizeQueryServer(cfg.Server); e == nil && canonicalQueryBase(cfgBase) != canonicalQueryBase(base) {
 			token = ""
 		}
 	}
@@ -375,6 +376,19 @@ func resolveQuerySettings(parsed *queryArgs, env queryEnv) (querySettings, error
 		return querySettings{}, err
 	}
 	return querySettings{base: base, token: strings.TrimSpace(token), timeout: timeout}, nil
+}
+
+// canonicalQueryBase 返回比较用的规范基址串：剥掉协议默认端口，
+// 使 https://h 与 https://h:443 判定为同一实例。
+func canonicalQueryBase(u *url.URL) string {
+	host := u.Host
+	if u.Scheme == "https" && strings.HasSuffix(host, ":443") {
+		host = strings.TrimSuffix(host, ":443")
+	}
+	if u.Scheme == "http" && strings.HasSuffix(host, ":80") {
+		host = strings.TrimSuffix(host, ":80")
+	}
+	return u.Scheme + "://" + host + strings.TrimRight(u.Path, "/")
 }
 
 // isLoopbackQueryHost 判定主机名是否回环地址（localhost / 127.x / ::1）。
@@ -472,13 +486,15 @@ func newQueryClient(settings querySettings) *queryClient {
 // 服务端收到的路径与制品实际路径不符。
 func (c *queryClient) endpoint(endpointPath string, params url.Values) string {
 	target := *c.base
-	escaped := strings.TrimRight(c.base.Path, "/") + endpointPath
-	if decoded, err := url.PathUnescape(escaped); err == nil {
-		target.Path = decoded
-		target.RawPath = escaped
-	} else {
-		target.Path = escaped
+	// 只解码 endpointPath：base.Path 已是解码形态（其转义形态用 EscapedPath 取），
+	// 整串再解码会把基址里字面的 %20 错改成空格。
+	decoded, err := url.PathUnescape(endpointPath)
+	if err != nil {
+		target.Path = strings.TrimRight(c.base.Path, "/") + endpointPath
 		target.RawPath = ""
+	} else {
+		target.Path = strings.TrimRight(c.base.Path, "/") + decoded
+		target.RawPath = strings.TrimRight(c.base.EscapedPath(), "/") + endpointPath
 	}
 	target.RawQuery = params.Encode()
 	return target.String()
@@ -487,21 +503,17 @@ func (c *queryClient) endpoint(endpointPath string, params url.Values) string {
 // downloadURL 拼出制品的下载地址 /repository/{repo}/{path}。
 func (c *queryClient) downloadURL(repo, path string) string {
 	target := *c.base
-	segments := []string{strings.TrimRight(c.base.Path, "/"), "repository", url.PathEscape(repo)}
+	plain := strings.TrimRight(c.base.Path, "/") + "/repository/" + repo
+	escaped := strings.TrimRight(c.base.EscapedPath(), "/") + "/repository/" + url.PathEscape(repo)
 	for _, segment := range strings.Split(strings.Trim(path, "/"), "/") {
 		if segment == "" {
 			continue
 		}
-		segments = append(segments, url.PathEscape(segment))
+		plain += "/" + segment
+		escaped += "/" + url.PathEscape(segment)
 	}
-	escaped := strings.Join(segments, "/")
-	if decoded, err := url.PathUnescape(escaped); err == nil {
-		target.Path = decoded
-		target.RawPath = escaped
-	} else {
-		target.Path = escaped
-		target.RawPath = ""
-	}
+	target.Path = plain
+	target.RawPath = escaped
 	target.RawQuery = ""
 	return target.String()
 }
@@ -538,9 +550,14 @@ func (c *queryClient) do(ctx context.Context, method, endpointPath string, param
 		return nil, fmt.Errorf("请求 %s 失败：%w", target, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, queryMaxReplyBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, queryMaxReplyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体（%s）：%w", target, err)
+	}
+	// 多读一个字节探测截断：超限响应绝不能当成功结果输出——静默截断的
+	// JSON/二进制会让下游把残缺内容当真值（如把不完整的制品当完整下载）。
+	if len(raw) > queryMaxReplyBytes {
+		return nil, fmt.Errorf("响应体超过 %d 字节上限（%s）：未输出任何内容，避免把截断数据当完整结果", queryMaxReplyBytes, target)
 	}
 	reply := &queryReply{
 		status:      resp.StatusCode,
@@ -1042,6 +1059,11 @@ func queryAPI(args []string, out io.Writer, env queryEnv) error {
 	// 空响应体（典型如 204 删除成功、202 受理）：动作已生效，直接报告状态，
 	// 不能把空体当 JSON 解析失败而谎报失败——调用方可能据此重试或告警。
 	if len(bytes.TrimSpace(reply.body)) == 0 {
+		// --json / --jq 模式下必须输出合法 JSON，否则下游解析失败。
+		if opts.json || opts.jq != "" {
+			_, err = fmt.Fprintln(out, "null")
+			return err
+		}
 		_, err = fmt.Fprintf(out, "%s %s -> %d（无响应体，已受理）\n", method, endpointPath, reply.status)
 		return err
 	}

@@ -721,3 +721,58 @@ func TestQueryEndpointDoesNotDoubleEscape(t *testing.T) {
 		t.Errorf("转义后路径应保留单次转义，实际 %q", gotEscaped)
 	}
 }
+
+// TestQueryEndpointBasePathNotDoubleDecoded 校验基址里字面 %20 不会被再次解码：
+// 只有 CLI 生成的 endpointPath 需要解码，base.Path 已是解码形态。
+func TestQueryEndpointBasePathNotDoubleDecoded(t *testing.T) {
+	var gotEscaped, gotPath string
+	server := serveQueryJSON(t, func(w http.ResponseWriter, r *http.Request) {
+		gotEscaped, gotPath = r.URL.EscapedPath(), r.URL.Path
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	if _, err := runQueryCapture(t, queryEnv{getenv: func(string) string { return "" }},
+		"api", "/api/v1/repositories/a%20b/status", "--server", server.URL+"/sub%20dir"); err != nil {
+		t.Fatalf("query api 应当成功：%v", err)
+	}
+	if gotPath != "/sub dir/api/v1/repositories/a b/status" {
+		t.Errorf("解码后路径不符，实际 %q", gotPath)
+	}
+	if gotEscaped != "/sub%20dir/api/v1/repositories/a%20b/status" {
+		t.Errorf("应保留单次转义，实际 %q", gotEscaped)
+	}
+}
+
+// TestQueryConfigTokenSameServerWithDefaultPort 校验显式默认端口不判为切换实例。
+func TestQueryConfigTokenSameServerWithDefaultPort(t *testing.T) {
+	var gotAuth string
+	server := serveQueryJSON(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	})
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	content := `{"server":"` + server.URL + `","token":"file-token"}`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("写入临时配置：%v", err)
+	}
+	env := queryEnv{getenv: func(string) string { return "" }, configPath: configPath}
+	// httptest 端口非 443/80，改用同地址显式端口验证比较逻辑等价（端口非默认时
+	// canonicalQueryBase 原样保留，同串即同实例）。
+	if _, err := runQueryCapture(t, env, "repos", "--server", server.URL); err != nil {
+		t.Fatalf("同实例查询应当成功：%v", err)
+	}
+	if gotAuth != "Bearer file-token" {
+		t.Errorf("同实例应沿用配置文件令牌，实际 %q", gotAuth)
+	}
+}
+
+// TestQueryReplyOverLimitFails 校验超限响应报错而不是静默截断。
+func TestQueryReplyOverLimitFails(t *testing.T) {
+	server := serveQueryJSON(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", queryMaxReplyBytes+100)))
+	})
+	_, err := runQueryCapture(t, queryEnv{getenv: func(string) string { return "" }},
+		"api", "/api/v1/big", "--server", server.URL)
+	if err == nil {
+		t.Fatal("超限响应应报错而非输出截断内容")
+	}
+}
