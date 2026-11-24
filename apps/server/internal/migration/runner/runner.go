@@ -139,24 +139,34 @@ func (r *Runner) Preflight(task *repository.MigrationTask) error {
 }
 
 // Finalize 对 completed 任务同步做增量：再枚举源，仅复制目标不存在的路径，写入 report.delta。
+// finalizeLockBudget 是收尾窗口等锁上界：工作者写 completed 后、放锁前的尾部窗口
+// 只有毫秒级，3 秒余量足够覆盖；真正执行中的任务在预算内依旧拿不到锁，拒绝语义不变。
+const finalizeLockBudget = 3 * time.Second
+const finalizeLockPoll = 25 * time.Millisecond
+
+// acquireTaskLock 在有界预算内等待任务锁释放。返回 true 表示已持锁。
+func (r *Runner) acquireTaskLock(taskID int64, budget, poll time.Duration) bool {
+	lk := r.taskLock(taskID)
+	if lk.TryLock() {
+		return true
+	}
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		time.Sleep(poll)
+		if lk.TryLock() {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runner) Finalize(ctx context.Context, taskID int64) error {
 	// 收尾窗口竞态：工作者写 completed 状态先于释放任务锁，紧随其后的 Finalize
 	// 用裸 TryLock 会把「刚完成」误判为「执行中」。给一段有界等待——真正执行中的
-	// 任务在窗口内依旧拿不到锁，拒绝语义不变。
+	// 任务在预算内依旧拿不到锁，拒绝语义不变。
 	lk := r.taskLock(taskID)
-	if !lk.TryLock() {
-		deadline := time.Now().Add(3 * time.Second)
-		locked := false
-		for time.Now().Before(deadline) {
-			time.Sleep(25 * time.Millisecond)
-			if lk.TryLock() {
-				locked = true
-				break
-			}
-		}
-		if !locked {
-			return fmt.Errorf("任务 %d 正在执行", taskID)
-		}
+	if !r.acquireTaskLock(taskID, finalizeLockBudget, finalizeLockPoll) {
+		return fmt.Errorf("任务 %d 正在执行", taskID)
 	}
 	defer lk.Unlock()
 
@@ -201,15 +211,27 @@ func (r *Runner) Finalize(ctx context.Context, taskID int64) error {
 		copied++
 	}
 	report := loadReport(task.ReportJSON)
-	// 合并 delta
+	// delta 累计而非覆盖：并发到达的第二次增量在拿到锁后会重扫（多半一无所获），
+	// 直接覆盖会把上一次真实增量抹成 0；累加保持「finalize 累计新搬了多少」口径。
+	var prevDelta struct {
+		Copied  int64 `json:"copied"`
+		Skipped int64 `json:"skipped"`
+	}
+	var prevRaw struct {
+		Delta json.RawMessage `json:"delta"`
+	}
+	_ = json.Unmarshal([]byte(task.ReportJSON), &prevRaw)
+	if len(prevRaw.Delta) > 0 {
+		_ = json.Unmarshal(prevRaw.Delta, &prevDelta)
+	}
 	raw := map[string]interface{}{
 		"copied":   report.Copied,
 		"skipped":  report.Skipped,
 		"failed":   report.Failed,
 		"failures": report.Failures,
 		"delta": map[string]interface{}{
-			"copied":  copied,
-			"skipped": skipped,
+			"copied":  prevDelta.Copied + copied,
+			"skipped": prevDelta.Skipped + skipped,
 		},
 	}
 	return r.tasks.SaveReportMeta(taskID, mustJSON(raw))

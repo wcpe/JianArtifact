@@ -25,7 +25,7 @@
 --   删仓库是管理员对仓库本身的动作，仓库没了其回收站条目也不该继续占着可见位置；
 --   条目消失后 blob 引用一并消失，blob-gc 自然回收。这与 asset 表的既有级联口径一致。
 
-CREATE TABLE asset_trash (
+CREATE TABLE IF NOT EXISTS asset_trash (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   -- 原仓库。仓删除时级联清理本表（与 asset 表同口径）。
   repository_id    INTEGER NOT NULL REFERENCES repository (id) ON DELETE CASCADE,
@@ -54,10 +54,16 @@ CREATE TABLE asset_trash (
 );
 
 -- 列表与统计只查 staged：把状态放在最前，让「回收站里还有多少」恒定走索引。
-CREATE INDEX idx_asset_trash_status_time ON asset_trash (status, trashed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_asset_trash_status_time ON asset_trash (status, trashed_at DESC);
 -- 恢复时需要判断「同一路径是否已有一条在回收站的记录」（配合 UNIQUE 近似唯一约束）。
-CREATE UNIQUE INDEX idx_asset_trash_active_path
+CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_trash_active_path
   ON asset_trash (repository_id, path) WHERE status = 'staged';
 -- blob 引用判定：每次孤立回收都要问「这个 hash 是否仍被回收站引用」，
 -- 这是热路径（blob-gc 会对每个活动 blob 问一次），必须有索引。
-CREATE INDEX idx_asset_trash_blob ON asset_trash (blob_hash);
+CREATE INDEX IF NOT EXISTS idx_asset_trash_blob ON asset_trash (blob_hash);
+
+-- 兜底：若某测试库曾在本特性预发布构建上跑过旧编号（0074 时期的同名回收站迁移），
+-- schema_migrations 里 0074 已被占位，0074_audit_log_entity_index 会被跳过。
+-- 这里幂等补建同一索引，保证这类库升级后审计按实体查历史仍走索引。
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+	ON audit_log (entity_type, entity_key, action, ts DESC);

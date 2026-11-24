@@ -269,6 +269,11 @@ func (s *AssetService) snapshotMetadataPointedBuild(repo *repository.Repository,
 func parseSnapshotPointedBuild(r io.Reader) (timestamp, buildNumber string) {
 	dec := xml.NewDecoder(r)
 	var depth []string
+	// CharData 按连续文本片段分发：元素里的注释或 CDATA 会把一个值切成多段
+	// （<timestamp>2024<!--x-->11</timestamp> → "2024"+"11"），只取首段会得到
+	// 截断值。pending 在该叶元素期间累积，到 EndElement 才提交。
+	var pending strings.Builder
+	pendingFor := ""
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -277,22 +282,31 @@ func parseSnapshotPointedBuild(r io.Reader) (timestamp, buildNumber string) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			depth = append(depth, t.Name.Local)
+			if len(depth) == 4 && depth[1] == "versioning" && depth[2] == "snapshot" &&
+				(depth[3] == "timestamp" || depth[3] == "buildNumber") {
+				pending.Reset()
+				pendingFor = depth[3]
+			} else {
+				pendingFor = ""
+			}
 		case xml.EndElement:
+			if pendingFor != "" && len(depth) == 4 && depth[3] == pendingFor {
+				value := strings.TrimSpace(pending.String())
+				if pendingFor == "timestamp" && timestamp == "" {
+					timestamp = value
+				}
+				if pendingFor == "buildNumber" && buildNumber == "" {
+					buildNumber = value
+				}
+				pendingFor = ""
+				pending.Reset()
+			}
 			if len(depth) > 0 {
 				depth = depth[:len(depth)-1]
 			}
 		case xml.CharData:
-			if len(depth) == 4 && depth[1] == "versioning" && depth[2] == "snapshot" {
-				switch depth[3] {
-				case "timestamp":
-					if timestamp == "" {
-						timestamp = strings.TrimSpace(string(t))
-					}
-				case "buildNumber":
-					if buildNumber == "" {
-						buildNumber = strings.TrimSpace(string(t))
-					}
-				}
+			if pendingFor != "" {
+				_, _ = pending.Write(t)
 			}
 		}
 		if timestamp != "" && buildNumber != "" {
