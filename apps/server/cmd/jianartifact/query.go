@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -333,10 +334,13 @@ func resolveQuerySettings(parsed *queryArgs, env queryEnv) (querySettings, error
 	if token == "" && env.getenv != nil {
 		token = env.getenv(envQueryToken)
 	}
+	tokenFromFlagOrEnv := token != ""
 	timeoutRaw := parsed.str("timeout")
+	var cfg queryConfigFile
 	// 仅在还有未定项时才读文件，避免每次查询都碰磁盘。
 	if serverRaw == "" || token == "" || timeoutRaw == "" {
-		cfg, err := loadQueryConfig(env)
+		var err error
+		cfg, err = loadQueryConfig(env)
 		if err != nil {
 			return querySettings{}, err
 		}
@@ -354,11 +358,34 @@ func resolveQuerySettings(parsed *queryArgs, env queryEnv) (querySettings, error
 	if err != nil {
 		return querySettings{}, err
 	}
+	// 配置文件里的令牌只属于该文件登记的那台服务端：用 --server / JIAN_SERVER
+	// 指向另一实例时不得沿用，否则会把凭据交给第三方实例（含恶意基址）。
+	if !tokenFromFlagOrEnv && cfg.Token != "" && cfg.Server != "" {
+		if cfgBase, e := normalizeQueryServer(cfg.Server); e == nil && cfgBase.String() != base.String() {
+			token = ""
+		}
+	}
+	// 带令牌时拒绝明文 HTTP 的非回环目标：令牌随请求头发送，明文等于把凭据交给
+	// 网络路径上的任何观察者。回环地址保留明文便利（本地调试没有中间人）。
+	if token != "" && base.Scheme == "http" && !isLoopbackQueryHost(base.Hostname()) {
+		return querySettings{}, fmt.Errorf("携带令牌时拒绝明文 HTTP 目标 %s：请改用 https://，回环调试地址除外", base.String())
+	}
 	timeout, err := parseQueryTimeout(timeoutRaw)
 	if err != nil {
 		return querySettings{}, err
 	}
 	return querySettings{base: base, token: strings.TrimSpace(token), timeout: timeout}, nil
+}
+
+// isLoopbackQueryHost 判定主机名是否回环地址（localhost / 127.x / ::1）。
+func isLoopbackQueryHost(host string) bool {
+	if host == "localhost" || host == "::1" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // normalizeQueryServer 校验并规范化服务端基址。
@@ -421,14 +448,38 @@ func newQueryClient(settings querySettings) *queryClient {
 		base:  settings.base,
 		token: settings.token,
 		// 复用默认 Transport：保留连接池与长连接复用，不另建连接器。
-		http: &http.Client{Timeout: settings.timeout},
+		http: &http.Client{
+			Timeout: settings.timeout,
+			// 带令牌时拒绝被重定向到明文：Go 默认只在跨主机时剥 Authorization，
+			// 同主机 https→http 仍会原样带出令牌。
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return errors.New("重定向次数过多")
+				}
+				if settings.token != "" && req.URL.Scheme == "http" && !isLoopbackQueryHost(req.URL.Hostname()) {
+					return fmt.Errorf("重定向目标为明文 HTTP（%s），携带令牌时拒绝跟随", req.URL)
+				}
+				return nil
+			},
+		},
 	}
 }
 
 // endpoint 组装完整请求地址：基址 + 路径 + 由 CLI 生成的查询串（全部经 net/url 转义）。
+//
+// 调用方传入的 endpointPath 已含 PathEscape 的段，因此写入 RawPath（已转义形态）
+// 而不是 Path——Path 赋转义串会被 URL.String() 再转义一次，把 % 变成 %25，
+// 服务端收到的路径与制品实际路径不符。
 func (c *queryClient) endpoint(endpointPath string, params url.Values) string {
 	target := *c.base
-	target.Path = strings.TrimRight(c.base.Path, "/") + endpointPath
+	escaped := strings.TrimRight(c.base.Path, "/") + endpointPath
+	if decoded, err := url.PathUnescape(escaped); err == nil {
+		target.Path = decoded
+		target.RawPath = escaped
+	} else {
+		target.Path = escaped
+		target.RawPath = ""
+	}
 	target.RawQuery = params.Encode()
 	return target.String()
 }
@@ -443,7 +494,14 @@ func (c *queryClient) downloadURL(repo, path string) string {
 		}
 		segments = append(segments, url.PathEscape(segment))
 	}
-	target.Path = strings.Join(segments, "/")
+	escaped := strings.Join(segments, "/")
+	if decoded, err := url.PathUnescape(escaped); err == nil {
+		target.Path = decoded
+		target.RawPath = escaped
+	} else {
+		target.Path = escaped
+		target.RawPath = ""
+	}
 	target.RawQuery = ""
 	return target.String()
 }
@@ -535,7 +593,7 @@ func translateQueryError(reply *queryReply) error {
 	case http.StatusNotFound:
 		return errors.New(head + "\n提示：核对仓库名与路径是否拼写正确；`jianartifact query repos` 可列出可见仓库，`jianartifact query ls <repo>` 可确认存在的目录；若该地址属于前端页面路由，说明接口路径写错了")
 	case http.StatusUnauthorized:
-		return errors.New(head + "\n提示：该端点需要认证，请补充 --token <令牌> 或设置环境变量 " + envQueryToken)
+		return errors.New(head + "\n提示：该端点需要认证——用 --token <令牌> 或环境变量 " + envQueryToken + " 补充凭据；若实例关闭了匿名访问，公开查询也可能要求凭据，或该端点本就不对匿名开放")
 	case http.StatusForbidden:
 		return errors.New(head + "\n提示：当前身份无权访问，请确认令牌具备该仓库读权限，或用 --token / " + envQueryToken + " 换一个令牌")
 	default:
@@ -981,11 +1039,19 @@ func queryAPI(args []string, out io.Writer, env queryEnv) error {
 	if err != nil {
 		return err
 	}
-	// 兜底端点的形状未知，人类可读输出直接给格式化 JSON。
+	// 空响应体（典型如 204 删除成功、202 受理）：动作已生效，直接报告状态，
+	// 不能把空体当 JSON 解析失败而谎报失败——调用方可能据此重试或告警。
+	if len(bytes.TrimSpace(reply.body)) == 0 {
+		_, err = fmt.Fprintf(out, "%s %s -> %d（无响应体，已受理）\n", method, endpointPath, reply.status)
+		return err
+	}
+	// 兜底端点的形状未知：JSON 给格式化输出，非 JSON（如 /metrics 的
+	// Prometheus 文本、纯文本）原样透传，不当作解析失败。
 	return emitQueryResult(out, reply.body, opts, func(w io.Writer) error {
 		value, err := decodeQueryJSON(reply.body)
 		if err != nil {
-			return err
+			_, werr := w.Write(reply.body)
+			return werr
 		}
 		return writeQueryJSON(w, value)
 	})

@@ -651,3 +651,73 @@ func TestQueryTreePrefixNormalization(t *testing.T) {
 		}
 	}
 }
+
+// TestQueryConfigTokenNotSentToOtherServer 校验切换 --server 时不再沿用配置文件里的令牌：
+// 令牌属于配置文件登记的那台实例，发给另一实例等于把凭据交给第三方。
+func TestQueryConfigTokenNotSentToOtherServer(t *testing.T) {
+	var gotAuth string
+	other := serveQueryJSON(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	})
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	content := `{"server":"https://home.example","token":"home-token"}`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("写入临时配置：%v", err)
+	}
+	env := queryEnv{getenv: func(string) string { return "" }, configPath: configPath}
+	if _, err := runQueryCapture(t, env, "repos", "--server", other.URL); err != nil {
+		t.Fatalf("查询其他实例应当成功：%v", err)
+	}
+	if gotAuth != "" {
+		t.Errorf("切换到未登记的实例时不应携带配置文件令牌，实际 %q", gotAuth)
+	}
+}
+
+// TestQueryTokenRejectsPlainHTTP 校验带令牌时拒绝非回环的明文 HTTP 目标。
+func TestQueryTokenRejectsPlainHTTP(t *testing.T) {
+	env := fakeQueryEnv(map[string]string{envQueryServer: "http://jian.example.com", envQueryToken: "tok"})
+	_, err := runQueryCapture(t, env, "repos")
+	if err == nil {
+		t.Fatal("带令牌请求明文 HTTP 应被拒绝")
+	}
+	if !strings.Contains(err.Error(), "http") {
+		t.Errorf("错误应指明明文 HTTP 被拒，实际 %v", err)
+	}
+}
+
+// TestQueryAPIEmptyBodyReportsAccepted 校验空响应体（204/202）不再按 JSON 解析失败谎报。
+func TestQueryAPIEmptyBodyReportsAccepted(t *testing.T) {
+	server := serveQueryJSON(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	out, err := runQueryCapture(t, queryEnv{getenv: func(string) string { return "" }},
+		"api", "/api/v1/repositories/demo", "--server", server.URL, "-X", "DELETE")
+	if err != nil {
+		t.Fatalf("204 空响应体应视为成功：%v", err)
+	}
+	if !strings.Contains(out, "204") {
+		t.Errorf("输出应报告状态码，实际 %q", out)
+	}
+}
+
+// TestQueryEndpointDoesNotDoubleEscape 校验含转义段的路径不会被二次转义。
+func TestQueryEndpointDoesNotDoubleEscape(t *testing.T) {
+	var gotEscaped, gotPath string
+	server := serveQueryJSON(t, func(w http.ResponseWriter, r *http.Request) {
+		gotEscaped, gotPath = r.URL.EscapedPath(), r.URL.Path
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	if _, err := runQueryCapture(t, queryEnv{getenv: func(string) string { return "" }},
+		"api", "/api/v1/repositories/a%20b/status", "--server", server.URL); err != nil {
+		t.Fatalf("query api 应当成功：%v", err)
+	}
+	if gotPath != "/api/v1/repositories/a b/status" {
+		t.Errorf("解码后路径应为 a b，实际 %q", gotPath)
+	}
+	// 二次转义时服务端看到的是字面 %2520（Path 里带 %20），单次转义则是 %20。
+	if gotEscaped != "/api/v1/repositories/a%20b/status" {
+		t.Errorf("转义后路径应保留单次转义，实际 %q", gotEscaped)
+	}
+}
