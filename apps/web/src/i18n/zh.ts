@@ -1423,7 +1423,8 @@ export const zh = {
     kpiActors: "操作者",
     kpiActorsHint: "去重账号数（不含系统/匿名）",
     // KPI 卡片点击提示：把指标直接当筛选动作，看到异常数字即可一键下钻。
-    kpiClearFilters: "点击清除搜索与全部筛选",
+    kpiClearFilters: "点击取消此结果筛选",
+    kpiClearAll: "点击清除搜索与全部筛选",
     kpiFilterSuccess: "点击只看成功记录",
     kpiFilterFailure: "点击只看失败记录",
     kpiFilterHighRisk: "高危多为不可逆操作；点击聚焦失败记录",
