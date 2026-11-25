@@ -425,7 +425,7 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "已应用待生效的备份恢复：%s\n", outcome.Summary())
 	}
 
-	svc, err := openServices(cfg)
+	svc, err := openServices(cfg, withFreezePersistence())
 	if err != nil {
 		return err
 	}
