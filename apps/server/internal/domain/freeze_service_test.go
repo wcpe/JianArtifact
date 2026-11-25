@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -155,5 +156,29 @@ func TestFreezePersistenceExpiredUntilAutoThaws(t *testing.T) {
 	c2 := NewFreezeControllerWithPersistence(nil, path)
 	if c2.State().Frozen {
 		t.Fatal("until 已过期的冻结状态重启后应自动解冻")
+	}
+}
+
+func TestFreezePersistenceMissingFrozenFieldFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "write-freeze.json")
+	// 合法 JSON 对象但缺 frozen 字段：必须按损坏 fail-closed，不能读成未冻结。
+	if err := os.WriteFile(path, []byte(`{"reason":"hand-edited"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewFreezeControllerWithPersistence(nil, path)
+	if !c.State().Frozen {
+		t.Fatal("缺 frozen 字段的状态文件应按手动冻结兜底")
+	}
+}
+
+func TestFreezePersistenceNullFileFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "write-freeze.json")
+	// 内容是 JSON null：解码不报错但不携带任何状态，同样 fail-closed。
+	if err := os.WriteFile(path, []byte(`null`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewFreezeControllerWithPersistence(nil, path)
+	if !c.State().Frozen {
+		t.Fatal("null 状态文件应按手动冻结兜底")
 	}
 }

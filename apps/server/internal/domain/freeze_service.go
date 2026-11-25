@@ -47,8 +47,11 @@ func NewFreezeController(base BusinessWriteGate) *FreezeController {
 
 // persistedFreezeState 是冻结状态的落盘形制。字段与 FreezeState 对齐，
 // 独立定义避免把 API 表述层结构耦进存储契约。
+// Frozen 用指针：JSON 对象缺 frozen 字段（或整个文件是 null）解码同样成功，
+// 不区分「显式 false」与「字段缺失」会把损坏文件读成未冻结、静默放写——
+// 与损坏文件 fail-closed 的既定口径矛盾。
 type persistedFreezeState struct {
-	Frozen   bool      `json:"frozen"`
+	Frozen   *bool     `json:"frozen"`
 	FrozenAt time.Time `json:"frozenAt"`
 	Until    time.Time `json:"until"`
 	Reason   string    `json:"reason"`
@@ -77,7 +80,13 @@ func NewFreezeControllerWithPersistence(base BusinessWriteGate, persistPath stri
 		c.reason = "冻结状态文件损坏，按安全失败方向兜底"
 		return c
 	}
-	c.frozen = st.Frozen
+	if st.Frozen == nil {
+		log.Printf("冻结状态文件缺 frozen 字段，按手动冻结兜底")
+		c.frozen = true
+		c.reason = "冻结状态文件缺 frozen 字段，按安全失败方向兜底"
+		return c
+	}
+	c.frozen = *st.Frozen
 	c.frozenAt = st.FrozenAt
 	c.until = st.Until
 	c.reason = st.Reason
@@ -91,8 +100,9 @@ func (c *FreezeController) persistLocked() {
 	if c.persistPath == "" {
 		return
 	}
+	frozen := c.frozen
 	raw, err := json.Marshal(persistedFreezeState{
-		Frozen:   c.frozen,
+		Frozen:   &frozen,
 		FrozenAt: c.frozenAt,
 		Until:    c.until,
 		Reason:   c.reason,
