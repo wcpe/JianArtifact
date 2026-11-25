@@ -541,6 +541,7 @@ func TestQueryNeedleMatchesNonASCIIUppercase(t *testing.T) {
 		}
 	}
 }
+
 // TestQueryNeedleASCIIMatchesDottedI 钉住纯 ASCII 针对非 ASCII 存储值的命中：
 // 折叠是不对称的——针 ipek 纯 ASCII 不代表记录纯 ASCII，SQLite 内置 LOWER()
 // 只折 ASCII 时存原文「İpek」永远匹配不上，折叠函数必须恒走 unicode_lower。
