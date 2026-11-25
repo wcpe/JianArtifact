@@ -322,11 +322,6 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		args = append(args, repoArgs...)
 	}
 	if f.Query != "" {
-		// 列侧折叠函数的选取：内置 LOWER() 只折 ASCII，而 Go 侧 ToLower 会连 É→é
-		// 一起折——只下小写针时「Équipe QA」这类记录搜不到，故非 ASCII 针必须走
-		// 持久层注册的 unicode_lower。纯 ASCII 针两种折叠产生同一结果集（Unicode
-		// 折叠不会把非 ASCII 折成 ASCII），此时改用内置 LOWER()，避免对每行每列
-		// 发起一次 Go 回调——30 天量级的审计行数会让搜索延迟不可忽略。
 		// 折叠函数必须恒为 unicode_lower：针纯 ASCII 不代表记录纯 ASCII——SQLite
 		// 内置 LOWER() 只折 ASCII，存进「İpek」这类记录后小写针 ipek 永远搜不到。
 		needle := "%" + strings.ToLower(strings.TrimSpace(f.Query)) + "%"
@@ -386,16 +381,6 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		args = append(args, values...)
 	}
 	return query, args
-}
-
-// isASCIIString 报告串是否只含 ASCII 字符（关键词针选折叠函数用）。
-func isASCIIString(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return false
-		}
-	}
-	return true
 }
 
 // failureResultSet 与 api.classifyAuditResult 的失败归类一致（含 partial 部分失败）。
