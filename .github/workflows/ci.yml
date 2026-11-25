@@ -107,12 +107,10 @@ jobs:
       # 目录即可还原。scripts/check.sh 的 sync_dist 在复用前会校验 index.html 的位置，
       # 万一层级不符（出现 dist/dist）会先纠正再继续，并给出明确提示。
       - name: 上传 embed 产物
-        uses: actions/upload-artifact@v5
+        uses: actions/cache/save@v4
         with:
-          name: web-dist
+          key: web-dist-${{ github.run_id }}-${{ github.run_attempt }}
           path: apps/server/web/dist
-          retention-days: 1
-          if-no-files-found: error
 
   # 后端静态检查与四个测试分片：互不依赖，全部并行。
   go-static:
@@ -143,10 +141,12 @@ jobs:
           command -v golangci-lint >/dev/null || go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
           command -v govulncheck >/dev/null || go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - name: 下载 embed 产物
-        uses: actions/download-artifact@v5
+        uses: actions/cache/restore@v4
         with:
-          name: web-dist
+          key: web-dist-${{ github.run_id }}-${{ github.run_attempt }}
           path: apps/server/web/dist
+          fail-on-cache-miss: true
+
       - name: 后端静态检查
         env:
           JIAN_GATE_SCOPE: go-static
@@ -172,19 +172,13 @@ jobs:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
       - name: 下载 embed 产物
-        uses: actions/download-artifact@v5
+        uses: actions/cache/restore@v4
         with:
-          name: web-dist
+          key: web-dist-${{ github.run_id }}-${{ github.run_attempt }}
           path: apps/server/web/dist
+          fail-on-cache-miss: true
+
       - name: 后端测试（${{ matrix.shard }}）
         env:
           JIAN_GATE_SCOPE: go-test-${{ matrix.shard }}
         run: bash scripts/check.sh
-      - name: 上传覆盖率
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: go-coverage-${{ matrix.shard }}
-          path: .tmp/go-coverage-${{ matrix.shard }}.out
-          retention-days: 1
-          if-no-files-found: ignore

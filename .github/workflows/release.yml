@@ -175,12 +175,10 @@ jobs:
           fi
 
       - name: 上传资产 artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/cache/save@v4
         with:
-          name: release-assets
+          key: release-assets-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/release/
-          if-no-files-found: error
-          retention-days: 14
 
   arm64-native-smoke:
     name: Linux arm64 原生冒烟
@@ -189,10 +187,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: 下载同次构建资产
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: release-assets
+          key: release-assets-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/release
+          fail-on-cache-miss: true
 
       - name: 校验并启动 arm64 服务
         shell: bash
@@ -292,10 +291,11 @@ jobs:
           git push -f origin refs/tags/dev-preview
 
       - name: 下载资产
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: release-assets
+          key: release-assets-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/release
+          fail-on-cache-miss: true
 
       - name: 生成发布说明
         id: notes
