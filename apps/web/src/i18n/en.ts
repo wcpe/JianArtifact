@@ -1510,6 +1510,7 @@ export const en = {
     kpiActorsHint: "Distinct accounts (excluding system/anonymous)",
     // KPI 卡片点击提示：把指标直接当筛选动作，看到异常数字即可一键下钻。
     kpiClearFilters: "Click to clear this result filter",
+    kpiClearAll: "Click to clear the search and all filters",
     kpiFilterSuccess: "Click to view successful records only",
     kpiFilterFailure: "Click to view failed records only",
     kpiFilterHighRisk: "High-risk means irreversible changes; click to focus on failures",

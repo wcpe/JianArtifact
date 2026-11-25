@@ -541,3 +541,42 @@ func TestQueryNeedleMatchesNonASCIIUppercase(t *testing.T) {
 		}
 	}
 }
+
+// TestQueryNeedleASCIIMatchesDottedI 钉住纯 ASCII 针对非 ASCII 存储值的命中：
+// 折叠是不对称的——针 ipek 纯 ASCII 不代表记录纯 ASCII，SQLite 内置 LOWER()
+// 只折 ASCII 时存原文「İpek」永远匹配不上，折叠函数必须恒走 unicode_lower。
+func TestQueryNeedleASCIIMatchesDottedI(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "observability-dotted-i.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO audit_log
+		(ts, actor, action, entity_type, entity_key, repo, detail, result, ip, source_node,
+		 status_code, duration_ms, user_agent, body_preview, http_headers)
+		VALUES (?, 'admin', 'group.member.add', 'group', 'İpek', 'maven-public',
+		 'member=ops@example.test group=İpek', 'ok', '203.0.113.7', '',
+		 200, 5, 'agent/1.0', '', '')`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("插入审计事件：%v", err)
+	}
+
+	repo := NewAuditObservabilityRepo(db)
+	filter := ObservabilityFilter{
+		From:       now.Add(-time.Hour).Format(time.RFC3339Nano),
+		To:         now.Add(time.Minute).Format(time.RFC3339Nano),
+		AuditMaxID: 1,
+		Query:      "ipek",
+	}
+	events, err := repo.ListEvents(filter)
+	if err != nil {
+		t.Fatalf("关键词筛选：%v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("纯 ASCII 针 ipek 应命中 İpek 记录：%+v", events)
+	}
+}

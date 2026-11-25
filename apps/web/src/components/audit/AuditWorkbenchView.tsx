@@ -156,7 +156,7 @@ export function AuditWorkbenchView() {
         model.setSearch("");
       },
       active: filters.category.length === 0 && filters.result.length === 0 && model.search === "",
-      selectHint: t("auditWorkbench.kpiClearFilters"),
+      selectHint: t("auditWorkbench.kpiClearAll"),
     },
     {
       label: t("auditWorkbench.kpiSuccess"),
