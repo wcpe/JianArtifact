@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"log"
 	"strconv"
 	"time"
@@ -163,7 +164,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 底座传 nil；冻结窗口（搬迁切换用）由该实例统一承载。
 	// 所有写栅栏必须装同一个 freeze 实例：只要有一个服务仍挂静态栅栏，冻结期间就
 	// 有写路径漏网，"停写" 语义不再成立——而搬迁切换依赖它成立。
-	freeze := domain.NewFreezeController(nil)
+	// 冻结状态落盘在数据目录根：重启回读保住「停写」语义（搬迁窗口中途重启不再静默放写）。
+	// 不随 restore 换库丢失——restore 替换的是 db/blob，数据目录根的运维状态文件不动。
+	freeze := domain.NewFreezeControllerWithPersistence(nil, filepath.Join(cfg.DataDir, "write-freeze.json"))
 	settingSvc.SetBusinessWriteGate(freeze)
 	repoSvc.SetBusinessWriteGate(freeze)
 	assetSvc.SetBusinessWriteGate(freeze)
