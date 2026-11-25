@@ -82,10 +82,13 @@ jobs:
           path: .tmp/slow-history.json
           key: slow-history-${{ github.run_id }}-${{ github.run_attempt }}
 
-  # 产物 job：只安装依赖 + 构建，产出 apps/web/dist 与同步后的 apps/server/web/dist。
-  # 它同时承担「构建验证」（vite build 必须成功），因此不重复跑前端测试。
-  build-dist:
-    name: 构建前端产物
+  # 后端静态检查与四个测试分片：互不依赖，全部并行。
+  # //go:embed all:dist 要求 apps/server/web/dist 非空且不入库，组织级禁令下又不能走
+  # artifact/cache 跨 job 传递（同 run 的 cache restore 实测不可靠——四格精确 key 全 miss
+  # 的实证见本仓 PR 讨论），所以每个 Go job 在自己的工作区内内联构建 dist，
+  # 产物不越 job 边界。前端构建约 1~2 分钟，远小于分片测试时间，代价可接受。
+  go-static:
+    name: 后端静态检查
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -102,25 +105,6 @@ jobs:
         env:
           JIAN_GATE_SCOPE: build-dist
         run: bash scripts/check.sh
-      # 只上传后端 embed 所需的那份，避免两份重复存储。
-      # 层级约定：artifact 内保留 apps/server/web/dist 之下的相对结构；下载端下载到同一
-      # 目录即可还原。scripts/check.sh 的 sync_dist 在复用前会校验 index.html 的位置，
-      # 万一层级不符（出现 dist/dist）会先纠正再继续，并给出明确提示。
-      - name: 上传 embed 产物
-        uses: actions/cache/save@v4
-        with:
-          key: web-dist-${{ github.run_id }}-${{ github.run_attempt }}
-          path: apps/server/web/dist
-
-  # 后端静态检查与四个测试分片：互不依赖，全部并行。
-  go-static:
-    name: 后端静态检查
-    needs: build-dist
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v7
       - name: 安装 Go
         uses: actions/setup-go@v7
         with:
@@ -140,13 +124,6 @@ jobs:
         run: |
           command -v golangci-lint >/dev/null || go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
           command -v govulncheck >/dev/null || go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-      - name: 下载 embed 产物
-        uses: actions/cache/restore@v4
-        with:
-          key: web-dist-${{ github.run_id }}-${{ github.run_attempt }}
-          path: apps/server/web/dist
-          fail-on-cache-miss: true
-
       - name: 后端静态检查
         env:
           JIAN_GATE_SCOPE: go-static
@@ -156,7 +133,6 @@ jobs:
   # 目前 4 片（api / repository / domain / 其余），最慢分片决定后端测试墙上时间。
   go-test:
     name: 后端测试（${{ matrix.shard }}）
-    needs: build-dist
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -166,17 +142,22 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6
+      - name: 安装 Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: 构建并同步到后端 embed 目录
+        env:
+          JIAN_GATE_SCOPE: build-dist
+        run: bash scripts/check.sh
       - name: 安装 Go
         uses: actions/setup-go@v7
         with:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
-      - name: 下载 embed 产物
-        uses: actions/cache/restore@v4
-        with:
-          key: web-dist-${{ github.run_id }}-${{ github.run_attempt }}
-          path: apps/server/web/dist
-          fail-on-cache-miss: true
 
       - name: 后端测试（${{ matrix.shard }}）
         env:
