@@ -327,11 +327,10 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		// 持久层注册的 unicode_lower。纯 ASCII 针两种折叠产生同一结果集（Unicode
 		// 折叠不会把非 ASCII 折成 ASCII），此时改用内置 LOWER()，避免对每行每列
 		// 发起一次 Go 回调——30 天量级的审计行数会让搜索延迟不可忽略。
+		// 折叠函数必须恒为 unicode_lower：针纯 ASCII 不代表记录纯 ASCII——SQLite
+		// 内置 LOWER() 只折 ASCII，存进「İpek」这类记录后小写针 ipek 永远搜不到。
 		needle := "%" + strings.ToLower(strings.TrimSpace(f.Query)) + "%"
-		lower := "LOWER"
-		if !isASCIIString(needle) {
-			lower = "unicode_lower"
-		}
+		lower := "unicode_lower"
 		var needleClauses []string
 		for _, col := range []string{
 			"action", "detail", "entity_key", "entity_type", "actor",
