@@ -89,7 +89,9 @@ func TestAccountRevocationLegacyAndTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	machine, digest := auth.GenerateToken()
-	if _, err = svc.db.Exec(`INSERT INTO api_token(user_id,name,token_digest) VALUES(?, 'pre-upgrade', ?)`, u.ID, digest); err != nil {
+	// 夹具模拟 0076 迁移回填后的升级前令牌：双 NULL 旧行已随回填退役（期限与代次对全部令牌无例外生效），
+	// 「升级前签发仍可用」的真实形态是回填宽限期内的行——代次取用户当前代次、期限取迁移口径 30 天宽限。
+	if _, err = svc.db.Exec(`INSERT INTO api_token(user_id,name,token_digest,account_epoch,expires_at) VALUES(?, 'pre-upgrade', ?, 1, strftime('%s','now') + 2592000)`, u.ID, digest); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(newApplicationHandler(cfg, svc, nil))
