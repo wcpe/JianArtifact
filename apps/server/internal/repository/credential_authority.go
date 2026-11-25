@@ -137,8 +137,9 @@ func credentialAccountForProof(ctx context.Context, q sqlx.QueryerContext, p aut
 	return u, err
 }
 
-const tokenCurrentSQL = `t.revoked_at IS NULL AND ((t.account_epoch IS NULL AND t.expires_at IS NULL AND u.account_epoch=1)
- OR (t.account_epoch=u.account_epoch AND t.expires_at>?))`
+// 双 NULL 豁免条款已随 0076 迁移回填退役：迁移将存量旧行的 expires_at 与 account_epoch
+// 一并回填（30 天宽限期），此后不再存在双 NULL 行，期限与代次裁决对全部令牌无例外生效。
+const tokenCurrentSQL = `t.revoked_at IS NULL AND t.account_epoch=u.account_epoch AND t.expires_at>?`
 
 // CredentialToken 是机器凭据随账号快照一并裁决的持久字段。
 type CredentialToken struct {

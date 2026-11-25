@@ -45,7 +45,7 @@ func TestCredentialAuthorityMigrationFrom0056(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT count(*) FROM schema_migrations WHERE version='0057'`,
 		`SELECT count(*) FROM user WHERE id=346 AND password_hash='opaque-fixture' AND status='disabled' AND account_epoch=3`,
-		`SELECT count(*) FROM api_token WHERE user_id=346 AND token_digest='opaque-test-digest' AND account_epoch IS NULL AND expires_at IS NULL`,
+		`SELECT count(*) FROM api_token WHERE user_id=346 AND token_digest='opaque-test-digest' AND account_epoch=3 AND expires_at>strftime('%s','now')`,
 		`SELECT count(*) FROM revoked_token WHERE jti='old-fixture-jti' AND expires_at=451`,
 		`SELECT NOT EXISTS(SELECT 1 FROM credential_session)`,
 		`SELECT NOT EXISTS(SELECT 1 FROM credential_account_access_receipt)`,
