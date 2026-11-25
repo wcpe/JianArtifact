@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -83,6 +84,12 @@ func (h *Handlers) CreateToken(c *gin.Context) {
 	if err != nil {
 		writeDomainErr(c, err)
 		return
+	}
+	// 签发未限用途旧式令牌时给出弃用警告：标准 Warning 头（HTTP 规范的弃用告示通道）
+	// + 服务端日志。时间盒见 auth.LegacyTokenSunsetDate。
+	if tok.Purpose == auth.TokenPurposeLegacy {
+		c.Header("Warning", `299 - "jat_ 未限用途令牌已弃用，`+auth.LegacyTokenSunsetDate+` 起停止签发；请改用 purpose=artifact_read/artifact_publish 的受限机器凭据"`)
+		log.Printf("签发已弃用的未限用途令牌 user=%d name=%q：%s 起停止签发", p.UserID, tok.Name, auth.LegacyTokenSunsetDate)
 	}
 	h.AuditLog(c, "token.create", "token", tok.Name, "", "tokenId="+strconv.FormatInt(tok.ID, 10), "ok")
 	created := TokenCreated{

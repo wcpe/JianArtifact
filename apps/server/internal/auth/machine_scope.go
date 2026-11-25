@@ -3,6 +3,12 @@ package auth
 import "encoding/json"
 
 // 机器 Token 用途：凭据的功能边界，与实时 ACL 取交集后再裁决请求。
+// LegacyTokenSunsetDate 是未限用途旧式令牌停止签发的弃用时间盒日期。
+// 当前为向后兼容期：签发照常但回 Warning 头警告（见 api/token_handlers.go）；
+// 到期的硬禁落地前，npm 登录等协议签发路径必须先迁移到受限凭据，
+// 否则到期日一到协议登录会断——因此硬禁是一个独立排期项，不在本期范围。
+const LegacyTokenSunsetDate = "2027-03-01"
+
 // TokenPurposeLegacy 是过渡期的未限用途旧凭据（早期签发、无 scope），
 // 只保留既有协议承载能力，仍不能越过通道限制新增的管理面入口。
 const (
