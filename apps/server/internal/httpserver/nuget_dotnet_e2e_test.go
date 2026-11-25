@@ -53,6 +53,23 @@ func TestNuGetDotnetPushRestoreAndBuildAcrossHostedProxyAndGroup(t *testing.T) {
 	}
 }
 
+// 目标框架跟随本机 dotnet SDK 主版本：还原只挂 jian 源（<clear/> 屏蔽一切外部 feed），
+// TargetFramework 的引用包（Microsoft.NETCore.App.Ref 等）只能由 SDK 自带的目标包满足——
+// SDK 只捆绑同代 TFM 的目标包，写死版本（如 net9.0）换台 SDK 更高的机器就会 NU1101。
+func dotnetTargetFramework(t *testing.T) string {
+	t.Helper()
+	output, err := exec.Command("dotnet", "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("探测 dotnet SDK 版本失败：%v：%s", err, output)
+	}
+	version := strings.TrimSpace(string(output))
+	major, _, found := strings.Cut(version, ".")
+	if !found || major == "" {
+		t.Fatalf("dotnet --version 输出形态无法解析：%q", version)
+	}
+	return "net" + major + ".0"
+}
+
 func buildDotnetNuGetPackage(t *testing.T, id, version string) string {
 	t.Helper()
 	directory := filepath.Join(t.TempDir(), "package")
@@ -60,7 +77,7 @@ func buildDotnetNuGetPackage(t *testing.T, id, version string) string {
 		t.Fatal(err)
 	}
 	project := filepath.Join(directory, "Package.csproj")
-	contents := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework><PackageId>` + id + `</PackageId><Version>` + version + `</Version></PropertyGroup></Project>`
+	contents := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>` + dotnetTargetFramework(t) + `</TargetFramework><PackageId>` + id + `</PackageId><Version>` + version + `</Version></PropertyGroup></Project>`
 	if err := os.WriteFile(project, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +103,7 @@ func restoreAndBuildDotnetConsumer(t *testing.T, source, id, version string) {
 		t.Fatal(err)
 	}
 	project := filepath.Join(directory, "Consumer.csproj")
-	contents := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net9.0</TargetFramework><RestoreSources>` + source + `</RestoreSources></PropertyGroup><ItemGroup><PackageReference Include="` + id + `" Version="` + version + `" /></ItemGroup></Project>`
+	contents := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>` + dotnetTargetFramework(t) + `</TargetFramework><RestoreSources>` + source + `</RestoreSources></PropertyGroup><ItemGroup><PackageReference Include="` + id + `" Version="` + version + `" /></ItemGroup></Project>`
 	if err := os.WriteFile(project, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
