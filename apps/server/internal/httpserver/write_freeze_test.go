@@ -151,6 +151,16 @@ func TestWriteFreezeRejectsWritesExceptAllowed(t *testing.T) {
 		t.Errorf("登录处理器调用次数 = %d，期望 1", env.handlers.loginCalls)
 	}
 
+	// 双因素登录完成端点放行：只放行 login 会把双因素管理员锁在门外、永远无法解冻。
+	// 这些路径未挂真实 handler，断言标准是「未被冻结中间件拦成 503」。
+	for _, path := range []string{
+		"/api/v1/auth/mfa/verify",
+		"/api/v1/auth/mfa/recover",
+		"/api/v1/auth/mfa/claim",
+	} {
+		assertNotWriteFrozen(t, env.request(http.MethodPost, path), "POST "+path)
+	}
+
 	// 导入/上传放行：冻结窗口的全部意义就是停写后做搬迁切换。
 	assertNotWriteFrozen(t, env.request(http.MethodPost, "/api/v1/backups/import"), "URL 导入")
 	if recorder := env.request(http.MethodPut, "/api/v1/backups/uploads/u1/chunks/0"); recorder.Code != http.StatusNoContent {

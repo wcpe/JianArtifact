@@ -40,8 +40,15 @@ func writeFrozenAllowed(method, requestPath string) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	case http.MethodPost:
-		if requestPath == "/api/v1/auth/login" {
-			return true // 否则无法登录去解冻
+		// 登录全链路放行：否则无法登录去解冻。双因素管理员在 login 之后
+		// 还必须走 mfa/verify（或 recover/claim）完成登录——只放行 login 会把
+		// 双因素管理员锁在门外，而持久化冻结跨重启存活后这成为真实的恢复死锁。
+		switch requestPath {
+		case "/api/v1/auth/login",
+			"/api/v1/auth/mfa/verify",
+			"/api/v1/auth/mfa/recover",
+			"/api/v1/auth/mfa/claim":
+			return true
 		}
 	}
 	for _, prefix := range writeFrozenAllowedPrefixes {

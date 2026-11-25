@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -91,7 +92,25 @@ type appServices struct {
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
-func openServices(cfg *config.Config) (*appServices, error) {
+// serviceOptions 是 openServices 的可选装配开关。
+type serviceOptions struct{ freezePersistence bool }
+
+// serviceOption 调整 openServices 的装配行为。
+type serviceOption func(*serviceOptions)
+
+// withFreezePersistence 启用冻结状态落盘回读。仅 serve 路径使用：
+// 冻结的语义是「搬迁窗口期停掉网络写」，约束的是对外服务进程；
+// 离线 admin 子命令（reset/backfill/mfa-claim 等）是运维恢复手段，
+// 若也被冻结文件挡住，运维在「无有效管理员 + 冻结未解」时会彻底锁死。
+func withFreezePersistence() serviceOption {
+	return func(o *serviceOptions) { o.freezePersistence = true }
+}
+
+func openServices(cfg *config.Config, opts ...serviceOption) (*appServices, error) {
+	var sopts serviceOptions
+	for _, o := range opts {
+		o(&sopts)
+	}
 	// SQLite 连接池上限来自 JIAN_SQLITE_MAX_CONNS（缺省/非正回落 8）。
 	// WAL 支持「多读 + 单写」，池放宽后读侧才真正并发；写仍由 SQLite 自身串行化。
 	db, err := persistence.OpenWithMaxConns(cfg.DBPath, cfg.SQLiteMaxConns)
@@ -163,7 +182,15 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 底座传 nil；冻结窗口（搬迁切换用）由该实例统一承载。
 	// 所有写栅栏必须装同一个 freeze 实例：只要有一个服务仍挂静态栅栏，冻结期间就
 	// 有写路径漏网，"停写" 语义不再成立——而搬迁切换依赖它成立。
-	freeze := domain.NewFreezeController(nil)
+	// 冻结状态落盘在数据目录根（仅 serve 路径启用，见 withFreezePersistence）：
+	// 重启回读保住「停写」语义（搬迁窗口中途重启不再静默放写）。
+	// 不随 restore 换库丢失——restore 替换的是 db/blob，数据目录根的运维状态文件不动。
+	var freeze *domain.FreezeController
+	if sopts.freezePersistence {
+		freeze = domain.NewFreezeControllerWithPersistence(nil, filepath.Join(cfg.DataDir, "write-freeze.json"))
+	} else {
+		freeze = domain.NewFreezeController(nil)
+	}
 	settingSvc.SetBusinessWriteGate(freeze)
 	repoSvc.SetBusinessWriteGate(freeze)
 	assetSvc.SetBusinessWriteGate(freeze)
