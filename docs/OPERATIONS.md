@@ -619,7 +619,7 @@ jianartifact-backup-<packageId>.tar.gz
 3. **生成差包 / 拉取导入**：在冻结窗口内生成增量差包（见 §3.3）或通过 `POST /api/v1/backups/import` 拉取外部包；导入只写 `restore-staging/` 与 `restore.pending`，重启才生效，不破坏冻结语义。
 4. **解冻**：`DELETE /api/v1/maintenance/freeze`（幂等，未冻结也返 200）。若用了 `until`/`ttlSeconds`，到期也会自动解冻。
 
-**冻结期放行清单**（避免"冻上就解不开"）：读方法（GET/HEAD/OPTIONS）、`POST /api/v1/auth/login`、维护命名空间 `/api/v1/maintenance/`、备份导入/上传路径（`/api/v1/backups/import{s}`、`/api/v1/backups/uploads`）。这些路径只写恢复暂存与标记、重启才生效，所以放行它们不会破坏"停写"的语义；拦掉它们反而会让冻结期间无法完成搬迁切换。
+**冻结期放行清单**（避免"冻上就解不开"）：读方法（GET/HEAD/OPTIONS）、登录全链路（`POST /api/v1/auth/login` 及双因素完成端点 `/api/v1/auth/mfa/verify`、`/api/v1/auth/mfa/recover`、`/api/v1/auth/mfa/claim`——双因素管理员在 login 之后还必须走这些端点完成登录，只放行 login 会构成恢复死锁）、维护命名空间 `/api/v1/maintenance/`、备份导入/上传路径（`/api/v1/backups/import{s}`、`/api/v1/backups/uploads`）。这些路径只写恢复暂存与标记、重启才生效，所以放行它们不会破坏"停写"的语义；拦掉它们反而会让冻结期间无法完成搬迁切换。
 
 ## 4. CLI 运维
 

@@ -195,7 +195,7 @@
 - `POST /api/v1/maintenance/freeze`：`{until?, ttlSeconds?, reason?}` 冻结写入。两者都省略时用 `ttlSeconds` 缺省 7200；窗口必须有界——`until` 须晚于当前且不超过 `now+24h`（否则 400），`ttlSeconds` 钳到 [60, 86400]。**故意不提供无限期冻结**（忘记解冻 = 服务假死）。返回生效后的 `WriteFreezeState`。
 - `DELETE /api/v1/maintenance/freeze`：解冻，幂等（未冻结也返 200 与当前状态）。
 
-冻结期间节点拒绝本地业务与管理写入（503 + `write_frozen`），但放行：读方法、`POST /api/v1/auth/login`、维护命名空间 `/api/v1/maintenance/`、以及备份导入/上传路径（`/api/v1/backups/import{s}`、`/api/v1/backups/uploads`）——它们只写 `restore-staging/` 与 `restore.pending`、重启才生效，不破坏冻结语义。
+冻结期间节点拒绝本地业务与管理写入（503 + `write_frozen`），但放行：读方法、登录全链路（`POST /api/v1/auth/login` 及双因素完成端点 `/api/v1/auth/mfa/verify`、`/api/v1/auth/mfa/recover`、`/api/v1/auth/mfa/claim`——只放行 login 会把双因素管理员锁在门外，持久化冻结跨重启存活后构成恢复死锁）、维护命名空间 `/api/v1/maintenance/`、以及备份导入/上传路径（`/api/v1/backups/import{s}`、`/api/v1/backups/uploads`）——它们只写 `restore-staging/` 与 `restore.pending`、重启才生效，不破坏冻结语义。
 
 ### 维护作业（FR-41）
 
