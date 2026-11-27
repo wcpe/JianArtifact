@@ -409,7 +409,7 @@ func (s *FormatMetadataService) pyPIUpstreamSession(repo *repository.Repository,
 	if project != "" {
 		base.Path += url.PathEscape(project) + "/"
 	}
-	session, err := s.upstream.NewSession(cfg.RemoteURL, cfg.CredentialRef)
+	session, err := s.upstream.NewSessionWithProxy(cfg.RemoteURL, cfg.CredentialRef, cfg.OutboundProxyID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1055,7 +1055,7 @@ func (s *FormatMetadataService) nugetProxySession(repo *repository.Repository) (
 	if err != nil || indexURL.User != nil || indexURL.RawQuery != "" || indexURL.Fragment != "" {
 		return nil, nil, ErrUpstream
 	}
-	session, err := s.upstream.NewSession(cfg.RemoteURL, cfg.CredentialRef)
+	session, err := s.upstream.NewSessionWithProxy(cfg.RemoteURL, cfg.CredentialRef, cfg.OutboundProxyID)
 	if err != nil {
 		return nil, nil, err
 	}

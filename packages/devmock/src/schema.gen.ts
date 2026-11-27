@@ -2707,6 +2707,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/outbound-proxies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 查询全局出站代理池与 Mihomo 运行时能力（仅管理员） */
+        get: operations["listOutboundProxies"];
+        put?: never;
+        /** 新增全局出站代理（仅管理员） */
+        post: operations["createOutboundProxy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outbound-proxies/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 更新全局出站代理（仅管理员） */
+        put: operations["updateOutboundProxy"];
+        post?: never;
+        /** 删除全局出站代理（仅管理员；若仍有仓库引用则返回 409） */
+        delete: operations["deleteOutboundProxy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outbound-proxies/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 测试出站代理到目标公网地址的连通性（仅管理员） */
+        post: operations["testOutboundProxy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4130,6 +4183,15 @@ export interface components {
             remoteUrl?: string;
             /** @description proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文） */
             credentialRef?: string;
+            /**
+             * Format: int64
+             * @description 挂载的全局出站代理 ID（仅 type=proxy；0 或缺省表示直连）
+             */
+            outboundProxyId?: number;
+            /** @description 挂载的全局出站代理名称（只读展示字段，仅管理员可见） */
+            outboundProxyName?: string;
+            /** @description proxy 仓库级 404 负缓存 TTL 覆盖（秒）；缺省表示继承全局配置，0 表示对该仓库关闭负缓存 */
+            negativeCacheTtlSeconds?: number;
             /** @description hosted 仓库是否拒绝覆盖已存在的 Release */
             immutableRelease?: boolean;
             /** @description group 仓库的成员仓库名（有序，仅 type=group） */
@@ -4216,6 +4278,13 @@ export interface components {
             remoteUrl?: string;
             /** @description proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文） */
             credentialRef?: string;
+            /**
+             * Format: int64
+             * @description 可选：为 proxy 仓库挂载的全局出站代理 ID（0 或缺省表示直连）
+             */
+            outboundProxyId?: number;
+            /** @description 可选：proxy 仓库级 404 负缓存 TTL 覆盖（秒）；缺省继承全局，0 关闭负缓存 */
+            negativeCacheTtlSeconds?: number;
             /** @description 创建 hosted 仓库时是否拒绝覆盖已存在的 Release */
             immutableRelease?: boolean;
             /** @description group 仓库的成员仓库名（有序，type=group 时必填） */
@@ -4249,6 +4318,13 @@ export interface components {
             remoteUrl?: string;
             /** @description 更新 proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文） */
             credentialRef?: string;
+            /**
+             * Format: int64
+             * @description 更新 proxy 仓库挂载的全局出站代理 ID（传 0 表示解除挂载改为直连；缺省表示不修改）
+             */
+            outboundProxyId?: number;
+            /** @description 更新 proxy 仓库级 404 负缓存 TTL（秒）：传 -1 恢复继承全局，传 0 关闭负缓存，传 1..3600 设自定义秒数；缺省表示不修改 */
+            negativeCacheTtlSeconds?: number;
             /** @description 更新 hosted 仓库是否拒绝覆盖已存在的 Release */
             immutableRelease?: boolean;
             /** @description 更新 group 成员仓库名（仅 type=group） */
@@ -5465,6 +5541,68 @@ export interface components {
             /** @description 可选：拉取完成后核对的归档摘要。 */
             expectedSha256?: string;
         };
+        /**
+         * @description 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
+         * @enum {string}
+         */
+        OutboundProxyKind: "http" | "socks5" | "mihomo";
+        OutboundProxy: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            kind: components["schemas"]["OutboundProxyKind"];
+            description: string;
+            /** @description 脱敏后的代理端点预览（不含密码、UUID、公钥或令牌） */
+            endpointPreview: string;
+            enabled: boolean;
+            /** @description 当前挂载该出站代理的 proxy 仓库主名列表 */
+            boundRepositories: string[];
+            createdAt: string;
+            updatedAt: string;
+        };
+        OutboundProxyList: {
+            items: components["schemas"]["OutboundProxy"][];
+            /** @description 宿主机是否已检测到可用的 mihomo / clash-meta 可执行文件 */
+            mihomoAvailable: boolean;
+            /** @description 检测到的 mihomo 版本信息（不可用时省略） */
+            mihomoVersion?: string;
+            /** @description 检测到的 mihomo 二进制路径（不可用时省略） */
+            mihomoBinary?: string;
+        };
+        CreateOutboundProxyRequest: {
+            name: string;
+            kind: components["schemas"]["OutboundProxyKind"];
+            description?: string;
+            /**
+             * @description 代理配置内容（服务端加密落库、绝不回显）：
+             *     - http：http://[user:pass@]host:port 或 https://...
+             *     - socks5：socks5://[user:pass@]host:port 或 socks5h://...
+             *     - mihomo：单节点分享链接（vless/vmess/trojan/ss/hysteria2/hy2/tuic/anytls）或 Clash/Mihomo YAML 节点片段
+             */
+            config: string;
+            /** @default true */
+            enabled: boolean;
+        };
+        UpdateOutboundProxyRequest: {
+            name?: string;
+            kind?: components["schemas"]["OutboundProxyKind"];
+            description?: string;
+            /** @description 可选：新的代理配置；留空且未切换 kind 时沿用已保存的加密配置 */
+            config?: string;
+            enabled?: boolean;
+        };
+        TestOutboundProxyRequest: {
+            /** @description 可选：测试目标公网 http/https URL（默认 https://libraries.minecraft.net/） */
+            targetUrl?: string;
+        };
+        TestOutboundProxyResult: {
+            ok: boolean;
+            /** @description 目标上游返回的 HTTP 状态码（建连失败时省略） */
+            statusCode?: number;
+            /** Format: int64 */
+            latencyMs: number;
+            message: string;
+        };
     };
     responses: {
         /** @description 参数非法、游标无效或游标与查询、会话不匹配；`error.code` 为 `invalid_security_filter`。 */
@@ -5701,6 +5839,8 @@ export interface components {
         PageParam: number;
         PageSizeParam: number;
         UserIdParam: number;
+        /** @description 全局出站代理 ID */
+        OutboundProxyIdParam: number;
         /** @description 用户组 ID */
         UserGroupIdParam: number;
         /** @description 待加入 / 移出该组的用户 ID */
@@ -10049,6 +10189,144 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listOutboundProxies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 出站代理列表与本机 Mihomo 可用状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboundProxyList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createOutboundProxy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOutboundProxyRequest"];
+            };
+        };
+        responses: {
+            /** @description 创建成功（仅回显脱敏预览，不返回密文或凭据） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboundProxy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateOutboundProxy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 全局出站代理 ID */
+                id: components["parameters"]["OutboundProxyIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateOutboundProxyRequest"];
+            };
+        };
+        responses: {
+            /** @description 更新成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboundProxy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteOutboundProxy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 全局出站代理 ID */
+                id: components["parameters"]["OutboundProxyIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    testOutboundProxy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 全局出站代理 ID */
+                id: components["parameters"]["OutboundProxyIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TestOutboundProxyRequest"];
+            };
+        };
+        responses: {
+            /** @description 探测结果（含延迟与上游状态码） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestOutboundProxyResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

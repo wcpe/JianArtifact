@@ -783,7 +783,8 @@ func TestNegativeCacheProxyErrorNotCached(t *testing.T) {
 }
 
 // TestNegativeCacheGroupConfirmedNotFoundCached 验证 group 全成员确认不存在时写负缓存：
-// TTL 内再次请求 group 直接 404，不再探测成员（即使成员后来有了该制品）。
+// 1. TTL 内且无成员写入时，再次请求 group 直接命中 group 负缓存返回 404，不再回源探测成员；
+// 2. 当某个成员仓库后续写入该制品时，级联失效父 group 的负缓存键，避免毒缓存遮蔽新写入构件。
 func TestNegativeCacheGroupConfirmedNotFoundCached(t *testing.T) {
 	t.Parallel()
 	var hits int32
@@ -812,16 +813,25 @@ func TestNegativeCacheGroupConfirmedNotFoundCached(t *testing.T) {
 		t.Fatalf("首次应回源 proxy 成员 1 次，实际 %d", n)
 	}
 
-	// 成员后来上传了该制品（不失效 group 层负缓存键，权衡见 docs/specs/0.7.1-404-negative-cache.md）。
-	if _, err := svc.Put("mem-hosted", "x.jar", bytes.NewReader([]byte("late-arrival")), "text/plain"); err != nil {
-		t.Fatalf("成员上传：%v", err)
-	}
-	// 二次：group 负缓存命中 → 直接 404，不探测成员（proxy 成员不再被请求）。
+	// 二次（成员未变更）：group 负缓存命中 → 直接 404，不再探测 proxy 成员。
 	if _, _, err := svc.Resolve(context.Background(), "g-confirm", "x.jar"); err != domain.ErrNotFound {
 		t.Fatalf("二次应命中 group 负缓存返回 ErrNotFound，实际：%v", err)
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
 		t.Fatalf("group 负缓存命中后不应再探测成员，实际 %d 次", n)
+	}
+
+	// 成员后来上传了该制品：写路径级联失效父 group 负缓存，三次请求立即可见。
+	if _, err := svc.Put("mem-hosted", "x.jar", bytes.NewReader([]byte("late-arrival")), "text/plain"); err != nil {
+		t.Fatalf("成员上传：%v", err)
+	}
+	_, rc, err := svc.Resolve(context.Background(), "g-confirm", "x.jar")
+	if err != nil {
+		t.Fatalf("成员写入级联失效父 group 负缓存后应命中，实际：%v", err)
+	}
+	_ = rc.Close()
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("命中本地成员后不应再探测 proxy 成员，实际 %d 次", n)
 	}
 }
 

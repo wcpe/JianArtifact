@@ -21,6 +21,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/metrics"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // Deps 汇集 Handlers 的依赖。健康 / 就绪端点仅用 Version 与 Checks，
@@ -78,6 +79,8 @@ type Deps struct {
 	CleanTasks                 CleanTaskController                     // 清理任务队列只读查询
 	Trash                      TrashController                         // 回收站（恢复 / 彻底删除 / 清空）
 	UpstreamHealth             *repository.UpstreamHealthRepo          // 上游健康历史读写（nil 时端点返回 503）
+	OutboundProxies            *domain.OutboundProxyService            // 全局出站代理池（nil 时端点返回 503）
+	UpstreamClient             *upstream.Client                        // 回源客户端（供出站代理连通性测试复用）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -183,6 +186,8 @@ type Handlers struct {
 	cleanTasks            CleanTaskController            // 清理任务队列
 	trash                 TrashController                // 回收站
 	upstreamHealth        *repository.UpstreamHealthRepo // 上游健康历史
+	outboundProxies       *domain.OutboundProxyService   // 全局出站代理池
+	upstreamClient        *upstream.Client               // 回源客户端
 }
 
 // StorageHealthController 提供存储体检快照（只读，不做任何清理）。
@@ -247,6 +252,8 @@ func NewHandlers(d Deps) *Handlers {
 		cleanTasks:                 d.CleanTasks,
 		trash:                      d.Trash,
 		upstreamHealth:             d.UpstreamHealth,
+		outboundProxies:            d.OutboundProxies,
+		upstreamClient:             d.UpstreamClient,
 	}
 }
 
@@ -637,6 +644,14 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 		if cfg.CredentialRef != "" {
 			out.CredentialRef = &cfg.CredentialRef
 		}
+		if cfg.OutboundProxyID > 0 {
+			pid := cfg.OutboundProxyID
+			out.OutboundProxyId = &pid
+		}
+		if cfg.NegativeCacheTTLSeconds != nil {
+			ttl := *cfg.NegativeCacheTTLSeconds
+			out.NegativeCacheTtlSeconds = &ttl
+		}
 		if len(cfg.Members) > 0 {
 			members := cfg.Members
 			out.Members = &members
@@ -672,10 +687,16 @@ func safeRemoteURLForResponse(raw string) bool {
 	return err == nil && u.IsAbs() && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
 
-// toRepo 把行模型转为契约 Repository，并按 MD-2 规则填充连接状态。
+// toRepo 把行模型转为契约 Repository，并按 MD-2 规则填充连接状态与出站代理名。
 func (h *Handlers) toRepo(r *repository.Repository, stats *domain.RepoStats) Repository {
 	out := toAPIRepository(r, stats)
 	out.ConnectionStatus = h.connectionStatus(r)
+	if out.OutboundProxyId != nil && *out.OutboundProxyId > 0 && h.outboundProxies != nil {
+		if view, err := h.outboundProxies.Get(*out.OutboundProxyId); err == nil && view != nil {
+			name := view.Name
+			out.OutboundProxyName = &name
+		}
+	}
 	return out
 }
 

@@ -63,6 +63,7 @@ import {
   deleteRepository,
   getEnabledFormats,
   listAllRepositories,
+  listOutboundProxies,
   updateRepository,
 } from "../api/endpoints";
 import type {
@@ -372,6 +373,22 @@ export function RepositoriesPage() {
   );
   const formatOptions = enabledFormatsState.data?.formats ?? [];
 
+  const outboundProxiesState = useAsync(
+    () => (canManage && createOpened ? listOutboundProxies() : Promise.resolve(null)),
+    [canManage, createOpened],
+    { cacheKey: canManage && createOpened ? `repositories:outbound-proxies:${user?.id}` : undefined },
+  );
+  const outboundProxyOptions = useMemo(() => {
+    const base = [{ value: "0", label: t("repoDetail.configOutboundProxyDirect") }];
+    for (const p of outboundProxiesState.data?.items ?? []) {
+      base.push({
+        value: String(p.id),
+        label: `${p.name} [${p.kind.toUpperCase()}]${p.enabled ? "" : ` (${t("outboundProxies.disabled")})`}`,
+      });
+    }
+    return base;
+  }, [outboundProxiesState.data, t]);
+
   // 客户端派生：置顶前置 → 名称筛选 → 分页切片。
   // 不做 memo：依赖里的 sortPinnedFirst 每次渲染都是新函数，memo 形同虚设；
   // 仓库这个数据量级（几十~几百条）直接算即可。
@@ -421,6 +438,9 @@ export function RepositoriesPage() {
       quotaBytesUnit: "GB" as QuotaUnit,
       quotaAssetsText: "0",
       cacheRetentionText: "0",
+      outboundProxyId: "0",
+      negCacheMode: "inherit" as "inherit" | "disable" | "custom",
+      negCacheCustomText: "60",
     },
     validate: {
       name: (v) => (v.trim() ? null : t("repositories.name")),
@@ -453,7 +473,7 @@ export function RepositoriesPage() {
   // 新建弹窗的治理字段（null = 非法输入，需内联提示并阻止提交）。
   // 配额两项只在 hosted 类型下渲染与校验（group 不承载写入，proxy 的缓存写入在读取回源路径上、
   // 没有准入预检与流式早拒，后端对这两类仓库提交非 0 配额直接 400）；
-  // 保留天数只在 proxy 类型下渲染与校验，避免「换成其他类型后隐藏字段里残留的非法值卡住提交」。
+  // 保留天数、出站代理与 404 负缓存只在 proxy 类型下渲染与校验。
   const createQuotaEditable = form.values.type === "hosted";
   const createQuotaBytesValue = parseQuotaBytes(
     form.values.quotaBytesText,
@@ -461,10 +481,17 @@ export function RepositoriesPage() {
   );
   const createQuotaAssetsValue = parseNonNegativeInt(form.values.quotaAssetsText);
   const createCacheRetentionValue = parseNonNegativeInt(form.values.cacheRetentionText);
+  const createNegCacheCustomValue = parseNonNegativeInt(form.values.negCacheCustomText);
   const createQuotaBytesInvalid = createQuotaEditable && createQuotaBytesValue === null;
   const createQuotaAssetsInvalid = createQuotaEditable && createQuotaAssetsValue === null;
   const createCacheRetentionInvalid =
     form.values.type === "proxy" && createCacheRetentionValue === null;
+  const createNegCacheCustomInvalid =
+    form.values.type === "proxy" &&
+    form.values.negCacheMode === "custom" &&
+    (createNegCacheCustomValue === null ||
+      createNegCacheCustomValue < 1 ||
+      createNegCacheCustomValue > 3600);
 
   const handleCreate = form.onSubmit((values) => {
     if (createQuotaBytesInvalid || createQuotaAssetsInvalid) {
@@ -475,7 +502,18 @@ export function RepositoriesPage() {
       notifyError(t("repoDetail.configCacheRetentionInvalid"));
       return;
     }
+    if (createNegCacheCustomInvalid) {
+      notifyError(t("repoDetail.configNegativeCacheInvalid"));
+      return;
+    }
     setCreating(true);
+    const proxyId = Number(values.outboundProxyId) || 0;
+    const negCacheTtl =
+      values.negCacheMode === "disable"
+        ? 0
+        : values.negCacheMode === "custom"
+          ? (createNegCacheCustomValue ?? 60)
+          : undefined;
     const payload = {
       name: values.name,
       format: values.format,
@@ -485,12 +523,18 @@ export function RepositoriesPage() {
       ...(values.description.trim() ? { description: values.description.trim() } : {}),
       ...(values.type === "proxy" ? { remoteUrl: values.remoteUrl.trim() } : {}),
       ...(values.type === "group" ? { members: values.members } : {}),
-      // 配额只有 hosted 可设（0 = 不限），保留天数只有 proxy 可设（0 = 关闭）；
-      // 其他类型不提交这两个字段，避免发出必然被后端 400 的值。
+      // 配额只有 hosted 可设（0 = 不限），保留天数/出站代理/负缓存只有 proxy 可设；
+      // 其他类型不提交这些字段，避免发出必然被后端 400 的值。
       ...(values.type === "hosted"
         ? { quotaBytes: createQuotaBytesValue ?? 0, quotaAssets: createQuotaAssetsValue ?? 0 }
         : {}),
-      ...(values.type === "proxy" ? { cacheRetentionDays: createCacheRetentionValue ?? 0 } : {}),
+      ...(values.type === "proxy"
+        ? {
+            cacheRetentionDays: createCacheRetentionValue ?? 0,
+            ...(proxyId > 0 ? { outboundProxyId: proxyId } : {}),
+            ...(negCacheTtl !== undefined ? { negativeCacheTtlSeconds: negCacheTtl } : {}),
+          }
+        : {}),
       // 别名去空去重后提交（后台仍会做全局唯一性校验兜底）。
       ...(() => {
         const aliases = Array.from(
@@ -1358,7 +1402,7 @@ export function RepositoriesPage() {
               )}
             </>
           ) : null}
-          {/* 代理缓存保留：仅 proxy 有意义（其他类型后端会拒绝非 0 值），故按类型出现/隐藏。 */}
+          {/* 代理缓存保留 + 出站代理 + 404 负缓存策略：仅 proxy 有意义，故按类型出现/隐藏。 */}
           {form.values.type === "proxy" ? (
             <>
               <TextInput
@@ -1382,6 +1426,45 @@ export function RepositoriesPage() {
                     : t("repoDetail.configCacheRetentionOff")}
                 </Text>
               )}
+              <Select
+                mt="sm"
+                label={t("repoDetail.configOutboundProxy")}
+                description={t("repoDetail.configOutboundProxyHint")}
+                data={outboundProxyOptions}
+                value={form.values.outboundProxyId}
+                onChange={(v) => form.setFieldValue("outboundProxyId", v ?? "0")}
+                allowDeselect={false}
+                searchable
+              />
+              <Select
+                mt="sm"
+                label={t("repoDetail.configNegativeCacheTtl")}
+                description={t("repoDetail.configNegativeCacheTtlHint")}
+                data={[
+                  { value: "inherit", label: t("repoDetail.configNegativeCacheInherit") },
+                  { value: "disable", label: t("repoDetail.configNegativeCacheDisable") },
+                  { value: "custom", label: t("repoDetail.configNegativeCacheCustom") },
+                ]}
+                value={form.values.negCacheMode}
+                onChange={(v) =>
+                  v &&
+                  form.setFieldValue("negCacheMode", v as "inherit" | "disable" | "custom")
+                }
+                allowDeselect={false}
+              />
+              {form.values.negCacheMode === "custom" ? (
+                <TextInput
+                  mt="sm"
+                  label={t("repoDetail.configNegativeCacheCustomLabel")}
+                  value={form.values.negCacheCustomText}
+                  error={
+                    createNegCacheCustomInvalid
+                      ? t("repoDetail.configNegativeCacheInvalid")
+                      : undefined
+                  }
+                  onChange={(e) => form.setFieldValue("negCacheCustomText", e.currentTarget.value)}
+                />
+              ) : null}
             </>
           ) : null}
           <Group justify="flex-end" mt="md">

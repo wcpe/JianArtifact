@@ -54,13 +54,19 @@ type Repository struct {
 }
 
 // RepositoryConfig 是 repository.config 列的结构化视图：
-// proxy 用 RemoteURL 存上游地址、CredentialRef 存受限逻辑名称（运行时只解析专用命名空间），group 用 Members 存有序成员仓库名。
-// hosted 三者皆空。序列化后落 config 列（缺省 "{}"）。
+// proxy 用 RemoteURL 存上游地址、CredentialRef 存受限逻辑名称（运行时只解析专用命名空间）、
+// OutboundProxyID 存可选全局出站代理 ID（0 表示直连）、NegativeCacheTTLSeconds 存可选仓库级
+// 404 负缓存 TTL 覆盖（nil 继承全局、0 禁用负缓存），group 用 Members 存有序成员仓库名。
+// hosted 上述代理/聚合字段皆空。序列化后落 config 列（缺省 "{}"）。
 type RepositoryConfig struct {
-	RemoteURL        string   `json:"remoteUrl,omitempty"`
-	CredentialRef    string   `json:"credentialRef,omitempty"`
-	Members          []string `json:"members,omitempty"`
-	ImmutableRelease bool     `json:"immutableRelease,omitempty"`
+	RemoteURL       string `json:"remoteUrl,omitempty"`
+	CredentialRef   string `json:"credentialRef,omitempty"`
+	OutboundProxyID int64  `json:"outboundProxyId,omitempty"`
+	// NegativeCacheTTLSeconds 是 proxy 仓库级 404 负缓存 TTL 覆盖（秒）：
+	// nil = 继承全局 negative_cache_ttl；0 = 对该仓库关闭负缓存；>0 = 自定义秒数（上限 3600）。
+	NegativeCacheTTLSeconds *int     `json:"negativeCacheTtlSeconds,omitempty"`
+	Members                 []string `json:"members,omitempty"`
+	ImmutableRelease        bool     `json:"immutableRelease,omitempty"`
 	// CacheRetentionDays 是 proxy 仓库代理缓存资产的保留天数：
 	// 0/缺省 = 关闭（默认），仅允许 proxy 类型取非 0；负数非法。
 	// 由 storage-cleanup 作业按此值淘汰超期缓存，删除走既有资产变更通道。

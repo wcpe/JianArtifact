@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-23T03:15:59.604Z",
+  "generatedAt": "2026-11-27T10:47:33.835Z",
   "go": [
     {
       "name": "github.com/apapsch/go-jsonmerge/v2",
@@ -126,6 +126,18 @@
       "version": "v1.6.0",
       "license": "BSD-3-Clause",
       "author": "google"
+    },
+    {
+      "name": "github.com/itchyny/gojq",
+      "version": "v0.12.20",
+      "license": "MIT",
+      "author": "itchyny"
+    },
+    {
+      "name": "github.com/itchyny/timefmt-go",
+      "version": "v0.1.9",
+      "license": "MIT",
+      "author": "itchyny"
     },
     {
       "name": "github.com/jmoiron/sqlx",

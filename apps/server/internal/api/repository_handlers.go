@@ -140,13 +140,23 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 		writeDomainErr(c, err)
 		return
 	}
+	var proxyNames map[int64]string
+	if isAdmin && h.outboundProxies != nil {
+		proxyNames, _ = h.outboundProxies.NameMap()
+	}
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
 		stats := statsMap[rows[i].ID]
 		item := toAPIRepository(&rows[i], &stats)
-		// 连接状态为管理面信息，仅管理员可见。
+		// 连接状态与出站代理名称均为管理面信息，仅管理员可见。
 		if isAdmin {
 			item.ConnectionStatus = h.connectionStatus(&rows[i])
+			if item.OutboundProxyId != nil && *item.OutboundProxyId > 0 {
+				if pName, ok := proxyNames[*item.OutboundProxyId]; ok && pName != "" {
+					nameCopy := pName
+					item.OutboundProxyName = &nameCopy
+				}
+			}
 		}
 		items = append(items, item)
 	}
@@ -181,6 +191,13 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.CredentialRef != nil {
 		cfg.CredentialRef = *req.CredentialRef
 	}
+	if req.OutboundProxyId != nil {
+		cfg.OutboundProxyID = *req.OutboundProxyId
+	}
+	if req.NegativeCacheTtlSeconds != nil {
+		ttl := *req.NegativeCacheTtlSeconds
+		cfg.NegativeCacheTTLSeconds = &ttl
+	}
 	if req.Members != nil {
 		cfg.Members = *req.Members
 	}
@@ -212,6 +229,12 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if cfg.CredentialRef != "" {
 		detail += " credentialRef=" + cfg.CredentialRef
 	}
+	if cfg.OutboundProxyID > 0 {
+		detail += " outboundProxyId=" + strconv.FormatInt(cfg.OutboundProxyID, 10)
+	}
+	if cfg.NegativeCacheTTLSeconds != nil {
+		detail += " negativeCacheTtlSeconds=" + strconv.Itoa(*cfg.NegativeCacheTTLSeconds)
+	}
 	if len(repo.Aliases) > 0 {
 		detail += " aliases=" + strings.Join(repo.Aliases, ",")
 	}
@@ -234,7 +257,8 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 // 每新增一个可更新字段都要在此登记，否则「只传新字段」的请求会被误判为空。
 func repositoryUpdateRequestEmpty(req UpdateRepositoryRequest) bool {
 	return req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil &&
-		req.CredentialRef == nil && req.ImmutableRelease == nil && req.Members == nil &&
+		req.CredentialRef == nil && req.OutboundProxyId == nil && req.NegativeCacheTtlSeconds == nil &&
+		req.ImmutableRelease == nil && req.Members == nil &&
 		req.Aliases == nil && req.QuotaBytes == nil && req.QuotaAssets == nil &&
 		req.CacheRetentionDays == nil
 }
@@ -243,7 +267,8 @@ func repositoryUpdateRequestEmpty(req UpdateRepositoryRequest) bool {
 // config 是整体覆盖写（逐字段覆盖后整列替换），因此必须先把现有配置读回来再改；
 // 一个 config 字段都没带时保持 nil，避免无谓的读改写把并发窗口放大。
 func repositoryConfigUpdateTouched(req UpdateRepositoryRequest) bool {
-	return req.RemoteUrl != nil || req.CredentialRef != nil || req.ImmutableRelease != nil ||
+	return req.RemoteUrl != nil || req.CredentialRef != nil || req.OutboundProxyId != nil ||
+		req.NegativeCacheTtlSeconds != nil || req.ImmutableRelease != nil ||
 		req.Members != nil || req.QuotaBytes != nil || req.QuotaAssets != nil ||
 		req.CacheRetentionDays != nil
 }
@@ -284,6 +309,17 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		if req.CredentialRef != nil {
 			cfg.CredentialRef = *req.CredentialRef
 		}
+		if req.OutboundProxyId != nil {
+			cfg.OutboundProxyID = *req.OutboundProxyId
+		}
+		if req.NegativeCacheTtlSeconds != nil {
+			if *req.NegativeCacheTtlSeconds < 0 {
+				cfg.NegativeCacheTTLSeconds = nil
+			} else {
+				ttl := *req.NegativeCacheTtlSeconds
+				cfg.NegativeCacheTTLSeconds = &ttl
+			}
+		}
 		if req.Members != nil {
 			cfg.Members = *req.Members
 		}
@@ -308,7 +344,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		return
 	}
 	// 审计附带逻辑凭据引用变更（配置或清除），只记名称不记明文。
-	detailParts := make([]string, 0, 6)
+	detailParts := make([]string, 0, 8)
 	if req.ImmutableRelease != nil {
 		detailParts = append(detailParts, "immutableRelease="+strconv.FormatBool(*req.ImmutableRelease))
 	}
@@ -317,6 +353,20 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 			detailParts = append(detailParts, "credentialRef="+*req.CredentialRef)
 		} else {
 			detailParts = append(detailParts, "credentialRef=(cleared)")
+		}
+	}
+	if req.OutboundProxyId != nil {
+		if *req.OutboundProxyId > 0 {
+			detailParts = append(detailParts, "outboundProxyId="+strconv.FormatInt(*req.OutboundProxyId, 10))
+		} else {
+			detailParts = append(detailParts, "outboundProxyId=(direct)")
+		}
+	}
+	if req.NegativeCacheTtlSeconds != nil {
+		if *req.NegativeCacheTtlSeconds < 0 {
+			detailParts = append(detailParts, "negativeCacheTtlSeconds=(inherit)")
+		} else {
+			detailParts = append(detailParts, "negativeCacheTtlSeconds="+strconv.Itoa(*req.NegativeCacheTtlSeconds))
 		}
 	}
 	if req.Aliases != nil {

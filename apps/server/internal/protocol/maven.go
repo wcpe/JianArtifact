@@ -173,6 +173,7 @@ func NewMavenHandler(raw *RawHandler) *MavenHandler {
 func (h *MavenHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
 	withCacheOutcome(c)
+	withNegativeCacheBypass(c)
 	withMavenResolveMemo(c)
 	defer h.markCacheResult(c, repoName)
 	if !h.authorize(c, repoName, "read") {

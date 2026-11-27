@@ -1675,6 +1675,8 @@ export const store = {
       visibility?: Repository["visibility"];
       description?: string;
       remoteUrl?: string;
+      outboundProxyId?: number;
+      negativeCacheTtlSeconds?: number;
       members?: string[];
       aliases?: string[];
       quotaBytes?: number;
@@ -1699,6 +1701,12 @@ export const store = {
     }
     if (input.remoteUrl) {
       repo.remoteUrl = input.remoteUrl;
+    }
+    if (input.outboundProxyId !== undefined && input.outboundProxyId > 0) {
+      repo.outboundProxyId = input.outboundProxyId;
+    }
+    if (input.negativeCacheTtlSeconds !== undefined && input.negativeCacheTtlSeconds >= 0) {
+      repo.negativeCacheTtlSeconds = input.negativeCacheTtlSeconds;
     }
     if (input.members && input.members.length > 0) {
       repo.members = input.members;
@@ -1727,6 +1735,8 @@ export const store = {
       visibility?: Repository["visibility"];
       description?: string;
       remoteUrl?: string;
+      outboundProxyId?: number;
+      negativeCacheTtlSeconds?: number;
       members?: string[];
       aliases?: string[];
       quotaBytes?: number;
@@ -1747,6 +1757,21 @@ export const store = {
     }
     if (patch.remoteUrl !== undefined) {
       repo.remoteUrl = patch.remoteUrl;
+    }
+    if (patch.outboundProxyId !== undefined) {
+      if (patch.outboundProxyId > 0) {
+        repo.outboundProxyId = patch.outboundProxyId;
+      } else {
+        delete repo.outboundProxyId;
+        delete repo.outboundProxyName;
+      }
+    }
+    if (patch.negativeCacheTtlSeconds !== undefined) {
+      if (patch.negativeCacheTtlSeconds < 0) {
+        delete repo.negativeCacheTtlSeconds;
+      } else {
+        repo.negativeCacheTtlSeconds = patch.negativeCacheTtlSeconds;
+      }
     }
     if (patch.members !== undefined) {
       repo.members = patch.members;

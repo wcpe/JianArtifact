@@ -49,6 +49,10 @@ type RepositoryService struct {
 	// 降级为播种初值），写入发生在 HTTP 处理 goroutine、读取发生在并发的搜索请求里。
 	// 普通字段就是数据竞态——-race 会抓到，生产上则表现为"偶发读到半个值"这种更难查的形态。
 	searchTimeoutNanos atomic.Int64
+	// outboundProxyExists 校验出站代理 ID 是否存在（wiring 注入 OutboundProxyService.Exists；nil 表示不做存在性校验）。
+	outboundProxyExists func(int64) (bool, error)
+	// negCacheInvalidator 在仓库配置更新或重新上线时级联失效本仓及父级 group 的 404 负缓存。
+	negCacheInvalidator func(int64)
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
@@ -57,6 +61,16 @@ func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, 
 	s := &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default()}
 	s.searchTimeoutNanos.Store(int64(searchTimeoutDefault))
 	return s
+}
+
+// SetOutboundProxyValidator 注入出站代理存在性校验回调。
+func (s *RepositoryService) SetOutboundProxyValidator(fn func(int64) (bool, error)) {
+	s.outboundProxyExists = fn
+}
+
+// SetNegativeCacheInvalidator 注入仓库负缓存级联失效回调（配置变更/重新上线时触发）。
+func (s *RepositoryService) SetNegativeCacheInvalidator(fn func(int64)) {
+	s.negCacheInvalidator = fn
 }
 
 // SetSearchTimeout 注入检索语句的预算上限（覆盖范围见 searchContext）。
@@ -421,6 +435,9 @@ func (s *RepositoryService) Update(name, visibility string, description *string,
 		if err := s.repos.UpdateConfig(repo.Name, configJSON); err != nil {
 			return nil, mapNotFound(err)
 		}
+		if s.negCacheInvalidator != nil {
+			s.negCacheInvalidator(repo.ID)
+		}
 	}
 	if description != nil {
 		if err := s.repos.UpdateDescription(repo.Name, *description); err != nil {
@@ -527,13 +544,19 @@ func (s *RepositoryService) SetOnline(name string, online bool) error {
 	if err := s.repos.SetOnline(repo.Name, online); err != nil {
 		return mapNotFound(err)
 	}
+	if online && s.negCacheInvalidator != nil {
+		s.negCacheInvalidator(repo.ID)
+	}
 	return nil
 }
 
 // validateConfig 校验仓库配置，按仓库类型校验结构化配置：
-//   - hosted：remoteUrl、credentialRef 与 members 均须为空；
-//   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，credentialRef 可选且必须是环境变量引用名；
-//   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，remoteUrl、credentialRef 与 immutableRelease 须为空或 false。
+//   - hosted：remoteUrl、credentialRef、outboundProxyId、negativeCacheTtlSeconds 与 members 均须为空；
+//   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，
+//     credentialRef 可选且必须是环境变量引用名，outboundProxyId 可选且必须指向已存在的出站代理，
+//     negativeCacheTtlSeconds 可选（0=关闭，1..3600=自定义秒数）；
+//   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，
+//     remoteUrl、credentialRef、outboundProxyId、negativeCacheTtlSeconds 与 immutableRelease 须为空或 false。
 //
 // cacheRetentionDays（代理缓存保留）只对 proxy 有意义，hosted/group 必须为 0，
 // proxy 上 0 = 关闭（默认）且不接受负数；存储配额 quotaBytes/quotaAssets 为仓库级上限，
@@ -545,9 +568,15 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 	if cfg.QuotaBytes < 0 || cfg.QuotaAssets < 0 {
 		return fmt.Errorf("%w: 存储配额不能为负数", ErrValidation)
 	}
+	if cfg.OutboundProxyID < 0 {
+		return fmt.Errorf("%w: 出站代理 ID 非法", ErrValidation)
+	}
+	if cfg.NegativeCacheTTLSeconds != nil && (*cfg.NegativeCacheTTLSeconds < 0 || *cfg.NegativeCacheTTLSeconds > 3600) {
+		return fmt.Errorf("%w: 负缓存 TTL 须在 0-3600 秒之间", ErrValidation)
+	}
 	switch typ {
 	case "hosted":
-		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || len(cfg.Members) > 0 || cfg.CacheRetentionDays != 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.OutboundProxyID != 0 || cfg.NegativeCacheTTLSeconds != nil || len(cfg.Members) > 0 || cfg.CacheRetentionDays != 0 {
 			return ErrValidation
 		}
 	case "proxy":
@@ -568,8 +597,17 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 		if cfg.CredentialRef != "" && !validCredentialRef(cfg.CredentialRef) {
 			return ErrValidation
 		}
+		if cfg.OutboundProxyID > 0 && s.outboundProxyExists != nil {
+			exists, err := s.outboundProxyExists(cfg.OutboundProxyID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("%w: 指定的出站代理不存在", ErrValidation)
+			}
+		}
 	case "group":
-		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.ImmutableRelease || len(cfg.Members) == 0 || cfg.CacheRetentionDays != 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.OutboundProxyID != 0 || cfg.NegativeCacheTTLSeconds != nil || cfg.ImmutableRelease || len(cfg.Members) == 0 || cfg.CacheRetentionDays != 0 {
 			return ErrValidation
 		}
 		if cfg.QuotaBytes != 0 || cfg.QuotaAssets != 0 {

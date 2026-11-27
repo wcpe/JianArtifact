@@ -431,6 +431,9 @@ func run() error {
 	}
 	closed := false
 	defer func() {
+		if svc.outboundProxySvc != nil {
+			svc.outboundProxySvc.Close()
+		}
 		if !closed {
 			_ = svc.db.Close()
 		}

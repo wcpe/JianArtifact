@@ -216,6 +216,16 @@ func withCacheOutcome(c *gin.Context) {
 	c.Request = c.Request.WithContext(domain.WithCacheOutcome(c.Request.Context()))
 }
 
+// withNegativeCacheBypass 尊重客户端显式强刷信号（Cache-Control: no-cache / max-age=0 或 Pragma: no-cache），
+// 让 Gradle --refresh-dependencies / mvn -U 等强制重验请求穿透 404 负缓存直连上游。
+func withNegativeCacheBypass(c *gin.Context) {
+	cc := strings.ToLower(c.GetHeader("Cache-Control"))
+	pragma := strings.ToLower(c.GetHeader("Pragma"))
+	if strings.Contains(cc, "no-cache") || strings.Contains(cc, "max-age=0") || strings.Contains(pragma, "no-cache") {
+		c.Request = c.Request.WithContext(domain.WithBypassNegativeCache(c.Request.Context()))
+	}
+}
+
 // markCacheResult 读取本次请求的缓存来源，仅当请求命中代理仓库且来源可判定（hit/miss）时写入上下文键。
 // hosted/group 一律保持缺省：group 的首个命中成员无法在此层可靠判定，宁可未知也不猜。
 func (h *RawHandler) markCacheResult(c *gin.Context, repoName string) {
@@ -235,6 +245,7 @@ func (h *RawHandler) markCacheResult(c *gin.Context, repoName string) {
 func (h *RawHandler) Get(c *gin.Context) {
 	repo := c.Param("repo")
 	withCacheOutcome(c)
+	withNegativeCacheBypass(c)
 	defer h.markCacheResult(c, repo)
 	if !h.authorize(c, repo, "read") {
 		return

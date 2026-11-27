@@ -293,6 +293,23 @@ func (h *proxyHealth) blockedCount() int {
 	return count
 }
 
+type probeRepoIDContextKey struct{}
+
+func withProbeRepoID(ctx context.Context, repoID int64) context.Context {
+	if repoID <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, probeRepoIDContextKey{}, repoID)
+}
+
+func probeRepoIDFromContext(ctx context.Context) int64 {
+	if ctx == nil {
+		return 0
+	}
+	id, _ := ctx.Value(probeRepoIDContextKey{}).(int64)
+	return id
+}
+
 // recordFailure 记录一次回源失败：推进一档退避回到 AUTO_BLOCKED（窗口从当前时刻重新计时），
 // 按 reason 累加阻止事件计数，并确保后台探测线程在运行（首次失败时启动）。
 func (h *proxyHealth) recordFailure(repoID int64, remoteURL, credentialRef string, reason UpstreamBlockReason) {
@@ -310,7 +327,7 @@ func (h *proxyHealth) recordFailure(repoID int64, remoteURL, credentialRef strin
 	h.mu.Unlock()
 	h.recordBlockEvent(reason)
 	if needStart {
-		go h.checkStatus(st, remoteURL, credentialRef)
+		go h.checkStatus(repoID, st, remoteURL, credentialRef)
 	}
 }
 
@@ -347,7 +364,7 @@ func (h *proxyHealth) status(repoID int64) RemoteHealth {
 // 状态机保证在跑）。返回最新状态视图，不等待自动阻止窗口。
 // 手动重测是**同步探测**，不等窗口、也不占用 HALF_OPEN 的业务探测名额。
 func (h *proxyHealth) recheck(repoID int64, remoteURL, credentialRef string) RemoteHealth {
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	ctx, cancel := context.WithTimeout(withProbeRepoID(context.Background(), repoID), probeTimeout)
 	defer cancel()
 	if err := h.check(ctx, remoteURL, credentialRef); err != nil {
 		h.recordFailure(repoID, remoteURL, credentialRef, UpstreamBlockReasonProbeFailed)
@@ -364,7 +381,7 @@ func (h *proxyHealth) recheck(repoID int64, remoteURL, credentialRef string) Rem
 // 不变量：AUTO_BLOCKED 与 HALF_OPEN ⇒ 必有探测线程在跑。线程生命周期与 stopCh 绑定：
 // recordSuccess 关闭 stopCh 即中断；线程退出时自行关闭并清空 stopCh（锁内）。
 // 业务与后台共用同一个探测名额，故每轮半开**只有一个**上游探测在飞。
-func (h *proxyHealth) checkStatus(st *remoteState, remoteURL, credentialRef string) {
+func (h *proxyHealth) checkStatus(repoID int64, st *remoteState, remoteURL, credentialRef string) {
 	for {
 		// 等待到窗口截止（不持锁，允许 recordSuccess 中断）。
 		h.mu.Lock()
@@ -416,7 +433,7 @@ func (h *proxyHealth) checkStatus(st *remoteState, remoteURL, credentialRef stri
 		h.mu.Unlock()
 
 		// 探测上游（不持锁，探测可能耗时）。
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		ctx, cancel := context.WithTimeout(withProbeRepoID(context.Background(), repoID), probeTimeout)
 		err := h.check(ctx, remoteURL, credentialRef)
 		cancel()
 

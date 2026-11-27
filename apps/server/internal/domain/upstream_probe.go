@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // 本文件实现上游健康的后台定时探测作业（调度器作业名 upstream-probe）。
@@ -147,6 +148,7 @@ func (s *UpstreamProbeService) probeOne(ctx context.Context, repo *repository.Re
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	probeCtx = upstream.WithOutboundProxyID(probeCtx, cfg.OutboundProxyID)
 	started := time.Now()
 	status, probeErr := s.assets.ProbeOnly(probeCtx, cfg.RemoteURL, cfg.CredentialRef)
 	category, reachable := upstreamProbeFailCategory(status, probeErr)

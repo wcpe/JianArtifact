@@ -1124,6 +1124,8 @@ interface CreateRepoBody {
   quotaAssets?: number;
   /** 代理缓存保留天数（0/缺省 = 关闭；仅 proxy 有语义）。 */
   cacheRetentionDays?: number;
+  outboundProxyId?: number;
+  negativeCacheTtlSeconds?: number;
 }
 
 interface AssetOperationBody {
@@ -2506,6 +2508,8 @@ export const handlers = [
       quotaBytes: body.quotaBytes,
       quotaAssets: body.quotaAssets,
       cacheRetentionDays: body.cacheRetentionDays,
+      outboundProxyId: body.outboundProxyId,
+      negativeCacheTtlSeconds: body.negativeCacheTtlSeconds,
     });
     if (!repo) {
       return err("conflict", "仓库名已存在", 409);
@@ -2531,6 +2535,8 @@ export const handlers = [
       visibility?: Repository["visibility"];
       description?: string;
       remoteUrl?: string;
+      outboundProxyId?: number;
+      negativeCacheTtlSeconds?: number;
       members?: string[];
       aliases?: string[];
       /** 存储配额局部补丁（缺省 = 不修改，0 = 改为不限）。 */
@@ -4302,4 +4308,157 @@ export const handlers = [
       assets,
     });
   }),
+
+  // —— 全局出站代理池（含 Mihomo 协议） ——
+  http.get("*/api/v1/outbound-proxies", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({
+      items: mockOutboundProxies,
+      mihomoAvailable: true,
+      mihomoVersion: "Mihomo Meta v1.19.0 linux amd64",
+      mihomoBinary: "/usr/local/bin/mihomo",
+    });
+  }),
+
+  http.post("*/api/v1/outbound-proxies", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      name?: string;
+      kind?: "http" | "socks5" | "mihomo";
+      description?: string;
+      config?: string;
+      enabled?: boolean;
+    };
+    if (!body.name?.trim() || !body.kind || !body.config?.trim()) {
+      return err("bad_request", "名称、协议类型与配置必填", 400);
+    }
+    if (mockOutboundProxies.some((p) => p.name === body.name!.trim())) {
+      return err("conflict", "代理名称已存在", 409);
+    }
+    const now = new Date().toISOString();
+    const created: MockOutboundProxy = {
+      id: ++mockOutboundProxySeq,
+      name: body.name.trim(),
+      kind: body.kind,
+      description: body.description?.trim() ?? "",
+      endpointPreview:
+        body.kind === "mihomo" ? "vless://hk.example.com:443 (reality)" : body.config.trim(),
+      enabled: body.enabled ?? true,
+      boundRepositories: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    mockOutboundProxies.push(created);
+    return HttpResponse.json(created, { status: 201 });
+  }),
+
+  http.put("*/api/v1/outbound-proxies/:id", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = Number(params.id);
+    const target = mockOutboundProxies.find((p) => p.id === id);
+    if (!target) {
+      return err("not_found", "出站代理不存在", 404);
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      name?: string;
+      kind?: "http" | "socks5" | "mihomo";
+      description?: string;
+      config?: string;
+      enabled?: boolean;
+    };
+    if (body.name !== undefined) target.name = body.name.trim();
+    if (body.kind !== undefined) target.kind = body.kind;
+    if (body.description !== undefined) target.description = body.description.trim();
+    if (body.enabled !== undefined) target.enabled = body.enabled;
+    if (body.config?.trim()) {
+      target.endpointPreview =
+        target.kind === "mihomo" ? "vless://hk.example.com:443 (reality)" : body.config.trim();
+    }
+    target.updatedAt = new Date().toISOString();
+    return HttpResponse.json(target);
+  }),
+
+  http.delete("*/api/v1/outbound-proxies/:id", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = Number(params.id);
+    const idx = mockOutboundProxies.findIndex((p) => p.id === id);
+    const target = idx >= 0 ? mockOutboundProxies[idx] : undefined;
+    if (!target) {
+      return err("not_found", "出站代理不存在", 404);
+    }
+    if (target.boundRepositories.length > 0) {
+      return err("conflict", "代理仍被仓库引用", 409);
+    }
+    mockOutboundProxies.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post("*/api/v1/outbound-proxies/:id/test", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = Number(params.id);
+    const target = mockOutboundProxies.find((p) => p.id === id);
+    if (!target) {
+      return err("not_found", "出站代理不存在", 404);
+    }
+    return HttpResponse.json({
+      ok: true,
+      statusCode: 200,
+      latencyMs: 86,
+      message: "上游响应 HTTP 200",
+    });
+  }),
 ];
+
+interface MockOutboundProxy {
+  id: number;
+  name: string;
+  kind: "http" | "socks5" | "mihomo";
+  description: string;
+  endpointPreview: string;
+  enabled: boolean;
+  boundRepositories: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+let mockOutboundProxySeq = 2;
+const mockOutboundProxies: MockOutboundProxy[] = [
+  {
+    id: 1,
+    name: "local-mihomo-mixed",
+    kind: "socks5",
+    description: "本机 Mihomo mixed-port 出口",
+    endpointPreview: "socks5h://127.0.0.1:7890",
+    enabled: true,
+    boundRepositories: [],
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: 2,
+    name: "hk-reality",
+    kind: "mihomo",
+    description: "香港 VLESS Reality 节点（托管 Mihomo）",
+    endpointPreview: "vless://hk.example.com:443 (reality)",
+    enabled: true,
+    boundRepositories: [],
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  },
+];
+

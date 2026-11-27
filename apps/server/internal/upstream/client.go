@@ -46,11 +46,12 @@ func (e *StatusError) Error() string {
 
 // Client 是回源 HTTP 客户端，持有带超时的 *http.Client。
 // 超时可在运行时经 SetTimeout 调整（回源超时动态配置）；
-// 内部用 RWMutex 保护 http.Client 的替换，Fetch 与 SetTimeout 并发安全。
+// 内部用 RWMutex 保护 http.Client 与 proxyResolver 的替换，并发安全。
 type Client struct {
-	mu     sync.RWMutex
-	http   *http.Client
-	policy outboundPolicy
+	mu            sync.RWMutex
+	http          *http.Client
+	policy        outboundPolicy
+	proxyResolver ProxyTransportResolver
 }
 
 type lookupIPAddrFunc func(context.Context, string) ([]net.IPAddr, error)
@@ -136,6 +137,14 @@ func (c *Client) Timeout() time.Duration {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.http.Timeout
+}
+
+// SetProxyResolver 注入按出站代理 ID 解析传输层的回调（供挂载了出站代理的 proxy 仓库使用）。
+// 未注入（nil）时，带有代理 ID 的请求直接返回 ErrProxyUnavailable，绝不静默降级直连。
+func (c *Client) SetProxyResolver(resolver ProxyTransportResolver) {
+	c.mu.Lock()
+	c.proxyResolver = resolver
+	c.mu.Unlock()
 }
 
 // Fetch 以 GET 拉取 baseURL 与 path 拼接后的资源，返回响应体（调用方负责关闭）与响应头。
@@ -235,10 +244,33 @@ func (c *Client) ProbeWithCredential(ctx context.Context, remoteURL, credentialR
 }
 
 // Do 执行已构造的上游请求。它在每个请求开始时校验目标地址；重定向由同一策略逐跳校验。
+// 当请求上下文绑定了出站代理 ID 时，经 proxyResolver 获取代理传输层转发，绝不静默降级直连。
 // 后续格式专用客户端注入显式凭据时必须复用此方法，不能绕过安全传输层。
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("%w: 请求为空", ErrUnsafeURL)
+	}
+	if proxyID := OutboundProxyIDFromContext(req.Context()); proxyID > 0 {
+		if err := c.policy.validateProxyTargetURL(req.URL); err != nil {
+			return nil, err
+		}
+		c.mu.RLock()
+		resolver := c.proxyResolver
+		timeout := c.http.Timeout
+		c.mu.RUnlock()
+		if resolver == nil {
+			return nil, ErrProxyUnavailable
+		}
+		rt, err := resolver(req.Context(), proxyID)
+		if err != nil {
+			return nil, err
+		}
+		proxied := &http.Client{
+			Timeout:       timeout,
+			Transport:     rt,
+			CheckRedirect: c.policy.checkProxyRedirect,
+		}
+		return proxied.Do(req)
 	}
 	if err := c.policy.validateURL(req.Context(), req.URL); err != nil {
 		return nil, err

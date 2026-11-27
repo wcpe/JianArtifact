@@ -1,12 +1,17 @@
 package domain
 
 import (
+	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // negativeCacheTTL 是 404 负缓存默认 TTL：同路径确认不存在的制品在 TTL 内直接返回
@@ -21,9 +26,32 @@ const negativeCacheTTL = 60 * time.Second
 // （见 NegativeCacheSnapshot：查询要持锁走一遍映射，无上限时会与所有读请求抢锁）。
 //
 // 淘汰只影响命中率、不影响正确性：负缓存本就是纯优化，丢掉条目最坏是多一次回源。
-// 本值刻意不引环境变量（TTL 配置化属  口径，本 FR 只补上限）；容量调优需要
-// 真实基数观测后再定，先给一个远高于典型缺失路径基数的常量。
 const negativeCacheMaxEntries = 10000
+
+// maxMavenSiblingPomReadBytes 是检测同坐标 POM <packaging> 时的最大读取字节数。
+const maxMavenSiblingPomReadBytes = 64 << 10
+
+type bypassNegativeCacheContextKey struct{}
+
+// WithBypassNegativeCache 在请求上下文标记本次读请求跳过 404 负缓存（例如客户端携带
+// Cache-Control: no-cache / Pragma: no-cache，如 Gradle --refresh-dependencies / mvn -U）。
+func WithBypassNegativeCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bypassNegativeCacheContextKey{}, true)
+}
+
+func shouldBypassNegativeCache(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(bypassNegativeCacheContextKey{}).(bool)
+	return v
+}
+
+type negCacheEntry struct {
+	writtenAt time.Time
+	customTTL time.Duration
+	hasCustom bool
+}
 
 // negativeCache 是 proxy/group 读路径的 404 负缓存：
 // 记录 (repoID, path) 最近一次「确认不存在」的时间，TTL 内同路径读请求直接 404，
@@ -32,26 +60,22 @@ const negativeCacheMaxEntries = 10000
 // 只缓存「确认不存在」的 404（所有成员均确认、无成员被熔断/阻止/离线跳过）；
 // 上游故障（5xx/超时/传输错误）与不可判定 404 一律不写，防止把上游故障误缓存成永久不存在。
 // 条目数受 maxEntries 约束（见 negativeCacheMaxEntries）。
-// 内存态、并发安全；由 AssetService 持有，并经 SetChangeRecorder 注入 ReplicationService
-// 共享（复制应用成功后失效对应键，见 replication.go）。
+// 内存态、并发安全；由 AssetService 持有。
 type negativeCache struct {
 	mu         sync.Mutex
 	ttl        time.Duration
 	maxEntries int
-	m          map[string]time.Time // 键 = repoID\0path → 写入时间
+	m          map[string]negCacheEntry // 键 = repoID\0path → 写入记录（支持仓库级自定义 TTL）
 }
 
 // newNegativeCache 构造负缓存。
 func newNegativeCache() *negativeCache {
-	return &negativeCache{ttl: negativeCacheTTL, maxEntries: negativeCacheMaxEntries, m: map[string]time.Time{}}
+	return &negativeCache{ttl: negativeCacheTTL, maxEntries: negativeCacheMaxEntries, m: map[string]negCacheEntry{}}
 }
 
-// setTTL 调整 TTL（装配层注入配置、测试与调优用）。
-//
-// 两种边界必须分开处理，这是「0 = 关闭负缓存」的第一处改造点：
-//   - 负数**忽略**：保留「非法值不动现值」的防御（配置层已回落默认，这里是第二道保险）。
-//   - 0 **照写**：0 是「关闭负缓存」的显式表达（见 add / hit 的关闭态分支），
-//     不能被当成「未配置」而忽略——忽略它会让配置层的 0 静默失效、负缓存照旧生效。
+// setTTL 调整全局默认 TTL（装配层注入配置、测试与调优用）。
+//   - 负数**忽略**：保留「非法值不动现值」的防御；
+//   - 0 **照写**：0 是「关闭全局负缓存」的显式表达。
 func (c *negativeCache) setTTL(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -62,9 +86,6 @@ func (c *negativeCache) setTTL(d time.Duration) {
 }
 
 // setMaxEntries 调整条目数上限（测试与调优用；<=0 忽略）。
-//
-// 有意不支持「0 = 关闭上限」：无上限正是本 FR 要修的缺陷（内存随时间线性增长、
-// 管理端查询无界遍历），把它开成可配置的关闭项等于留一条回到旧缺陷的开关。
 func (c *negativeCache) setMaxEntries(n int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -73,47 +94,56 @@ func (c *negativeCache) setMaxEntries(n int) {
 	}
 }
 
+func (c *negativeCache) entryTTLLocked(e negCacheEntry) time.Duration {
+	if e.hasCustom {
+		return e.customTTL
+	}
+	return c.ttl
+}
+
+func (c *negativeCache) isExpiredLocked(e negCacheEntry, now time.Time) bool {
+	ttl := c.entryTTLLocked(e)
+	if ttl <= 0 {
+		return true
+	}
+	return now.Sub(e.writtenAt) >= ttl
+}
+
 // hit 报告 (repoID, path) 是否处于负缓存有效期内；过期条目顺带清理。
-//
-// ttl <= 0 是关闭态：直接返回 false，语义显式，不依赖 time.Since(at) >= c.ttl
-// 在 ttl==0 时恒为真这一巧合——后者今天「看起来能用」，但一旦日后有人调整比较方向
-// 或加入时钟抽象，关闭态就会悄悄变成「永久命中」。
 func (c *negativeCache) hit(repoID int64, path string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.ttl <= 0 {
-		return false
-	}
 	key := negativeKey(repoID, path)
-	at, ok := c.m[key]
+	entry, ok := c.m[key]
 	if !ok {
 		return false
 	}
-	if time.Since(at) >= c.ttl {
+	if c.isExpiredLocked(entry, time.Now()) {
 		delete(c.m, key)
 		return false
 	}
 	return true
 }
 
-// add 记录一次「确认不存在」，写入当前时间。
-//
-// ttl <= 0 是关闭态：**直接返回、不写 map**。这是「0 = 关闭负缓存」的第二处改造点，
-// 也是最容易漏掉的一半：hit 的过期判断是 time.Since(at) >= c.ttl，ttl==0 时恒为真，
-// 于是命中永远失败——功能上「看起来已经关闭」。但若仍然写入，每次确认 404 都会往 m 里
-// 塞一条键，而这条键只会在下次 hit 同一路径时才被删除；长期运行 + 大量不同缺失路径
-// （Gradle 反复试错、扫描器、错误配置的客户端）会让 m 单调增长且永不回收，
-// 是一个只在重启时才消失的内存增长缺陷。
-//
-// 满上限时先做一次全量过期清理，仍满则淘汰写入时间最早的一条。清理与淘汰都在
-// 本方法已持有的锁内完成，因此只在真正满上限时付 O(n) 代价；未满上限的常态路径
-// 与旧实现完全一致（一次 map 写入）。
+// add 按全局默认 TTL 记录一次「确认不存在」，写入当前时间。
 func (c *negativeCache) add(repoID int64, path string) {
+	c.addEntry(repoID, path, 0, false)
+}
+
+// addWithCustomTTL 按仓库级覆盖 TTL 记录一次「确认不存在」；ttl<=0 表示该仓库关闭负缓存，不写表。
+func (c *negativeCache) addWithCustomTTL(repoID int64, path string, ttl time.Duration) {
+	c.addEntry(repoID, path, ttl, true)
+}
+
+func (c *negativeCache) addEntry(repoID int64, path string, customTTL time.Duration, hasCustom bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// 关闭态不写任何条目：调用点（proxy/group 的 404 记账）全部保留，
-	// 关闭语义由这里兜住——若改成在调用点散布 if enabled 判断，未来新增调用点会再次漏掉。
-	if c.ttl <= 0 {
+	effectiveTTL := c.ttl
+	if hasCustom {
+		effectiveTTL = customTTL
+	}
+	// 关闭态不写任何条目，避免 map 单调增长。
+	if effectiveTTL <= 0 {
 		return
 	}
 	key := negativeKey(repoID, path)
@@ -124,10 +154,14 @@ func (c *negativeCache) add(repoID int64, path string) {
 			c.evictOldestLocked()
 		}
 	}
-	c.m[key] = time.Now()
+	c.m[key] = negCacheEntry{
+		writtenAt: time.Now(),
+		customTTL: customTTL,
+		hasCustom: hasCustom,
+	}
 }
 
-// remove 失效 (repoID, path) 的负缓存（写路径 Put/Delete/复制应用成功时调用）。
+// remove 失效 (repoID, path) 的负缓存（写路径 Put/Delete/回源缓存成功时调用）。
 func (c *negativeCache) remove(repoID int64, path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -154,9 +188,10 @@ func splitNegativeKey(key string) (repoID int64, path string, ok bool) {
 
 // purgeExpiredLocked 删除全部已过期条目，返回删除条数；调用方必须已持有 c.mu。
 func (c *negativeCache) purgeExpiredLocked() int {
+	now := time.Now()
 	removed := 0
-	for key, at := range c.m {
-		if time.Since(at) >= c.ttl {
+	for key, entry := range c.m {
+		if c.isExpiredLocked(entry, now) {
 			delete(c.m, key)
 			removed++
 		}
@@ -169,9 +204,9 @@ func (c *negativeCache) purgeExpiredLocked() int {
 func (c *negativeCache) evictOldestLocked() {
 	oldestKey := ""
 	var oldestAt time.Time
-	for key, at := range c.m {
-		if oldestKey == "" || at.Before(oldestAt) || (at.Equal(oldestAt) && key < oldestKey) {
-			oldestKey, oldestAt = key, at
+	for key, entry := range c.m {
+		if oldestKey == "" || entry.writtenAt.Before(oldestAt) || (entry.writtenAt.Equal(oldestAt) && key < oldestKey) {
+			oldestKey, oldestAt = key, entry.writtenAt
 		}
 	}
 	if oldestKey != "" {
@@ -195,12 +230,6 @@ type NegativeCacheEntry struct {
 }
 
 // NegativeCacheFilter 是负缓存查询与清理的过滤条件。
-//
-// 字段用途按操作区分（不混用）：
-//   - RepositoryID：0 表示不限仓库；
-//   - PathPrefix：仅快照查询使用，空串表示不限前缀；
-//   - ExactPath：仅清理使用，非空表示只删这一条精确路径；
-//   - Limit：仅快照查询使用，<=0 表示不限条数（调用方负责给默认值与上限）。
 type NegativeCacheFilter struct {
 	RepositoryID int64
 	PathPrefix   string
@@ -212,7 +241,7 @@ type NegativeCacheFilter struct {
 type NegativeCacheSnapshot struct {
 	// Total 是**过滤前**的有效条目总数（清理过期后统计）。
 	Total int
-	// TTL 是当前负缓存 TTL。
+	// TTL 是当前全局默认负缓存 TTL。
 	TTL time.Duration
 	// MaxEntries 是当前条目上限。
 	MaxEntries int
@@ -221,14 +250,13 @@ type NegativeCacheSnapshot struct {
 }
 
 // snapshot 返回负缓存快照：先清理过期条目，再按条件过滤并按写入时间升序截断。
-// 全程只读内存、持同一把锁完成一次遍历，不访问数据库与网络。
 func (c *negativeCache) snapshot(f NegativeCacheFilter) NegativeCacheSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.purgeExpiredLocked()
 	out := NegativeCacheSnapshot{Total: len(c.m), TTL: c.ttl, MaxEntries: c.maxEntries}
 	now := time.Now()
-	for key, at := range c.m {
+	for key, entry := range c.m {
 		repoID, path, ok := splitNegativeKey(key)
 		if !ok {
 			continue
@@ -239,11 +267,12 @@ func (c *negativeCache) snapshot(f NegativeCacheFilter) NegativeCacheSnapshot {
 		if f.PathPrefix != "" && !strings.HasPrefix(path, f.PathPrefix) {
 			continue
 		}
+		ttl := c.entryTTLLocked(entry)
 		out.Items = append(out.Items, NegativeCacheEntry{
 			RepositoryID: repoID,
 			Path:         path,
-			WrittenAt:    at,
-			Remaining:    c.ttl - now.Sub(at),
+			WrittenAt:    entry.writtenAt,
+			Remaining:    ttl - now.Sub(entry.writtenAt),
 		})
 	}
 	sort.Slice(out.Items, func(i, j int) bool {
@@ -259,17 +288,13 @@ func (c *negativeCache) snapshot(f NegativeCacheFilter) NegativeCacheSnapshot {
 }
 
 // purge 删除匹配的条目并返回删除条数。
-//
-// 语义：RepositoryID 为 0 表示全清；只给 RepositoryID 表示按仓库清；
-// RepositoryID + ExactPath 表示精确清一条。已过期但尚未被清理的条目不计数——
-// 它们本就不再生效，把它们算进「删除数」会误导排障者以为动了仍在起作用的记忆。
 func (c *negativeCache) purge(f NegativeCacheFilter) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
 	removed := 0
-	for key, at := range c.m {
-		if now.Sub(at) >= c.ttl {
+	for key, entry := range c.m {
+		if c.isExpiredLocked(entry, now) {
 			delete(c.m, key)
 			continue
 		}
@@ -302,16 +327,9 @@ func (c *negativeCache) count() int {
 func (s *AssetService) SetNegativeCacheMaxEntries(n int) { s.negCache.setMaxEntries(n) }
 
 // NegativeCacheEntriesCount 返回当前负缓存有效条目数（清理过期后统计）。
-// 供装配层接进 /metrics 的 jianartifact_negative_cache_entries 仪表；
-// 只读内存态，不查库、不访问网络。
 func (s *AssetService) NegativeCacheEntriesCount() int { return s.negCache.count() }
 
 // NegativeCacheSnapshot 返回负缓存快照（仅管理员端点使用）。
-//
-// 「只读内存」的边界：条目遍历与过期清理都在负缓存锁内完成、不查库；
-// 仓库名是契约要求的字段（repositoryId + path 之外还要人能看懂的仓库名），
-// 因此按命中到的仓库 ID 做**一次**批量查询补名，而不是逐条查库。
-// 条目数已被 maxEntries 钉住，因此这次补名的 ID 数量同样有界。
 func (s *AssetService) NegativeCacheSnapshot(f NegativeCacheFilter) (NegativeCacheSnapshot, error) {
 	snap := s.negCache.snapshot(f)
 	if len(snap.Items) == 0 {
@@ -339,5 +357,213 @@ func (s *AssetService) NegativeCacheSnapshot(f NegativeCacheFilter) (NegativeCac
 }
 
 // PurgeNegativeCache 清理负缓存并返回实际删除的**有效**条目数（仅管理员端点使用）。
-// 纯内存操作，不查库、不访问网络。
-func (s *AssetService) PurgeNegativeCache(f NegativeCacheFilter) int { return s.negCache.purge(f) }
+// 指定 RepositoryID 时，同步级联失效所有包含该仓库的父级 group 负缓存，
+// 防止「清了 proxy 负缓存但 maven-public 聚合仓仍返回过期 404」。
+func (s *AssetService) PurgeNegativeCache(f NegativeCacheFilter) int {
+	removed := s.negCache.purge(f)
+	if f.RepositoryID != 0 {
+		for _, gid := range s.parentGroupIDs(f.RepositoryID) {
+			removed += s.negCache.purge(NegativeCacheFilter{
+				RepositoryID: gid,
+				ExactPath:    f.ExactPath,
+			})
+		}
+	}
+	return removed
+}
+
+// InvalidateRepoNegativeCache 清理指定仓库及其所有父级 group 的负缓存条目
+// （在修改仓库上游/代理配置、重新上线或手动重测恢复后调用）。
+func (s *AssetService) InvalidateRepoNegativeCache(repoID int64) int {
+	if s == nil || repoID <= 0 {
+		return 0
+	}
+	return s.PurgeNegativeCache(NegativeCacheFilter{RepositoryID: repoID})
+}
+
+// invalidatePathWithGroups 在成员仓库写入/回源缓存/删除制品后，同步失效自身及所有父级 group
+// 上该路径的 404 负缓存，避免新上传或刚恢复的制品被 group 级负缓存继续遮蔽。
+func (s *AssetService) invalidatePathWithGroups(repoID int64, path string) {
+	if s == nil || repoID <= 0 || path == "" {
+		return
+	}
+	s.negCache.remove(repoID, path)
+	for _, gid := range s.parentGroupIDs(repoID) {
+		s.negCache.remove(gid, path)
+	}
+}
+
+// parentGroupIDs 查找所有直接或间接包含 targetRepoID 的 group 仓库 ID（带环路保护）。
+func (s *AssetService) parentGroupIDs(targetRepoID int64) []int64 {
+	if s == nil || s.repos == nil || targetRepoID <= 0 {
+		return nil
+	}
+	all, err := s.repos.List(1000, 0)
+	if err != nil || len(all) == 0 {
+		return nil
+	}
+	byName := make(map[string]*repository.Repository, len(all))
+	for i := range all {
+		byName[all[i].Name] = &all[i]
+	}
+	// memberID -> direct parent group IDs
+	parents := make(map[int64][]int64)
+	for i := range all {
+		if all[i].Type != "group" {
+			continue
+		}
+		cfg, decErr := all[i].DecodeConfig()
+		if decErr != nil {
+			continue
+		}
+		for _, memberName := range cfg.Members {
+			if m, ok := byName[memberName]; ok {
+				parents[m.ID] = append(parents[m.ID], all[i].ID)
+			}
+		}
+	}
+	visited := map[int64]bool{targetRepoID: true}
+	queue := []int64{targetRepoID}
+	var result []int64
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, gid := range parents[cur] {
+			if visited[gid] {
+				continue
+			}
+			visited[gid] = true
+			result = append(result, gid)
+			queue = append(queue, gid)
+		}
+	}
+	return result
+}
+
+// recordProxyNegativeCache 在 proxy 上游明确返回 404 时按仓库级配置与 Maven 同坐标 POM 保护决定是否写入负缓存。
+func (s *AssetService) recordProxyNegativeCache(repo *repository.Repository, cfg repository.RepositoryConfig, path string) {
+	if s.shouldSkipMavenNegativeCache(repo, path) {
+		return
+	}
+	if cfg.NegativeCacheTTLSeconds != nil {
+		s.negCache.addWithCustomTTL(repo.ID, path, time.Duration(*cfg.NegativeCacheTTLSeconds)*time.Second)
+		return
+	}
+	s.negCache.add(repo.ID, path)
+}
+
+// recordGroupNegativeCache 在 group 所有成员确认不存在时写入负缓存：
+//   - 若命中 Maven 同坐标「有 pom 无 jar」保护，不写负缓存；
+//   - 若任一在线 proxy 成员显式配置了 negativeCacheTtlSeconds（如 0 禁用或更短 TTL），
+//     group 负缓存取其中的最小值（含 0 禁用），避免聚合仓负缓存覆盖成员级防毒配置。
+func (s *AssetService) recordGroupNegativeCache(repo *repository.Repository, members []*repository.Repository, path string) {
+	if s.shouldSkipMavenNegativeCache(repo, path) {
+		return
+	}
+	hasCustom := false
+	var minCustom time.Duration
+	for _, member := range members {
+		if member == nil || !member.Online || member.Type != "proxy" {
+			continue
+		}
+		mcfg, err := member.DecodeConfig()
+		if err != nil || mcfg.NegativeCacheTTLSeconds == nil {
+			continue
+		}
+		d := time.Duration(*mcfg.NegativeCacheTTLSeconds) * time.Second
+		if !hasCustom || d < minCustom {
+			hasCustom = true
+			minCustom = d
+		}
+	}
+	if hasCustom {
+		if minCustom <= 0 {
+			return
+		}
+		// 若全局 TTL 更短（含 0 关闭），以更短者为准。
+		s.negCache.mu.Lock()
+		globalTTL := s.negCache.ttl
+		s.negCache.mu.Unlock()
+		if globalTTL <= 0 {
+			return
+		}
+		if globalTTL < minCustom {
+			minCustom = globalTTL
+		}
+		s.negCache.addWithCustomTTL(repo.ID, path, minCustom)
+		return
+	}
+	s.negCache.add(repo.ID, path)
+}
+
+// shouldSkipMavenNegativeCache 防止「有 pom 无 jar」的负缓存中毒：
+// 当 Maven 坐标的同目录 .pom 已缓存在本地（且 <packaging> 不是 pom）时，
+// 该坐标对应的主 .jar 或运行时分类 .jar（排除 -sources.jar / -javadoc.jar 等可选附件）
+// 遇到上游 404 大概率是瞬时 404 / 上游半发布 / 镜像毒缓存，绝不写入负缓存锁死构建。
+func (s *AssetService) shouldSkipMavenNegativeCache(repo *repository.Repository, artPath string) bool {
+	if repo == nil || repo.Format != "maven" {
+		return false
+	}
+	pomPath, ok := mavenSiblingPomPath(artPath)
+	if !ok {
+		return false
+	}
+	_, rc, err := s.localGetRecursive(repo, pomPath, 0)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = rc.Close() }()
+	data, readErr := io.ReadAll(io.LimitReader(rc, maxMavenSiblingPomReadBytes))
+	if readErr != nil || len(data) == 0 {
+		return false
+	}
+	var pom struct {
+		Packaging string `xml:"packaging"`
+	}
+	if xmlErr := xml.Unmarshal(data, &pom); xmlErr != nil {
+		// POM 存在但无法解析 XML 时，出于保守起见不写负缓存。
+		return true
+	}
+	// packaging=pom 的模块本就没有 jar，允许正常负缓存；其余（空/jar/bundle 等）应有 jar，跳过负缓存。
+	return !strings.EqualFold(strings.TrimSpace(pom.Packaging), "pom")
+}
+
+// mavenSiblingPomPath 判断 artPath 是否为受「有 pom 无 jar」保护的 Maven JAR 路径，
+// 并推导出同坐标的 .pom 路径（.../<artifactId>/<version>/<artifactId>-<version>.pom）。
+func mavenSiblingPomPath(artPath string) (string, bool) {
+	cleaned := strings.Trim(artPath, "/")
+	lower := strings.ToLower(cleaned)
+	if !strings.HasSuffix(lower, ".jar") {
+		return "", false
+	}
+	// 排除 IDE/构建工具频繁探测的可选附件（它们天然可能不存在，应继续享受快速负缓存）。
+	for _, optionalSuffix := range []string{
+		"-sources.jar",
+		"-javadoc.jar",
+		"-test-sources.jar",
+		"-tests.jar",
+		"-groovydoc.jar",
+		"-scaladoc.jar",
+	} {
+		if strings.HasSuffix(lower, optionalSuffix) {
+			return "", false
+		}
+	}
+	parts := strings.Split(cleaned, "/")
+	if len(parts) < 4 {
+		return "", false
+	}
+	artifactID := parts[len(parts)-3]
+	version := parts[len(parts)-2]
+	filename := parts[len(parts)-1]
+	if artifactID == "" || version == "" || strings.HasSuffix(artifactID, ".gradle.plugin") {
+		return "", false
+	}
+	prefix := artifactID + "-" + version
+	// 匹配主 jar（<artifact>-<version>.jar）以及带运行时分类器的 jar（如 v12004-12004-mapped.jar / -universal.jar）。
+	if filename != prefix+".jar" && !strings.HasPrefix(filename, prefix+"-") {
+		return "", false
+	}
+	dir := strings.Join(parts[:len(parts)-1], "/")
+	return dir + "/" + prefix + ".pom", true
+}

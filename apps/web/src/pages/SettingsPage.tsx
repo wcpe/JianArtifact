@@ -59,6 +59,7 @@ import {
 import { formatBytes, formatStamp } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { PageShell } from "../app/PageShell";
+import { OutboundProxiesSection } from "../components/settings/OutboundProxiesSection";
 
 const MIN_SECS = 1;
 const MAX_SECS = 3600;
@@ -2009,6 +2010,9 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
           ))}
         </Stack>
       </OpsSection>
+
+      {/* 全局出站代理池（支持 HTTP / SOCKS5 / 托管 Mihomo 节点） */}
+      <OutboundProxiesSection />
     </Stack>
   );
 }

@@ -382,6 +382,7 @@ func (s *AssetService) Status(repoID int64) RemoteHealth { return s.health.statu
 
 // RecheckConnection 手动重测 proxy 仓库上游连接：立即 HEAD 探测并更新
 // auto-block 状态，返回最新状态视图。仅 online 仓库可调用（调用方负责校验）。
+// 重测成功恢复 AVAILABLE 时同步清理该仓库及父级 group 的 404 负缓存，避免旧负缓存继续阻断构建。
 func (s *AssetService) RecheckConnection(repoID int64, remoteURL string) RemoteHealth {
 	credentialRef := ""
 	if repo, err := s.repos.GetByID(repoID); err == nil {
@@ -390,7 +391,11 @@ func (s *AssetService) RecheckConnection(repoID int64, remoteURL string) RemoteH
 			credentialRef = cfg.CredentialRef
 		}
 	}
-	return s.health.recheck(repoID, remoteURL, credentialRef)
+	st := s.health.recheck(repoID, remoteURL, credentialRef)
+	if st.Status == StatusAvailable {
+		s.InvalidateRepoNegativeCache(repoID)
+	}
+	return st
 }
 
 // SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
@@ -450,7 +455,7 @@ func (s *AssetService) putWithPrimaryOperation(repoName string, repo *repository
 	if err != nil {
 		return nil, err
 	}
-	s.negCache.remove(repo.ID, path)
+	s.invalidatePathWithGroups(repo.ID, path)
 	return stored, nil
 }
 
@@ -539,7 +544,7 @@ func (s *AssetService) putWithCommitHook(repoName, path string, r io.Reader, con
 	if err != nil {
 		return nil, err
 	}
-	s.negCache.remove(repo.ID, path)
+	s.invalidatePathWithGroups(repo.ID, path)
 	s.recordAssetPut(repo.Name, stored)
 	return stored, nil
 }
@@ -630,6 +635,9 @@ func (s *AssetService) publishAssets(repoName string, after []*repository.Asset,
 		return "", audited.mapWriteError(err)
 	}
 	s.releasePublishedBlobs(after)
+	for _, item := range items {
+		s.invalidatePathWithGroups(repo.ID, item.Path)
+	}
 	return operationID, nil
 }
 
@@ -673,7 +681,7 @@ func (s *AssetService) PublishAssetsWithEnvelope(repoName string, after []*repos
 	}
 	s.releasePublishedBlobs(after)
 	for _, item := range items {
-		s.negCache.remove(repo.ID, item.Path)
+		s.invalidatePathWithGroups(repo.ID, item.Path)
 	}
 	return envelope.OperationID, nil
 }
@@ -841,8 +849,8 @@ func (s *AssetService) persistAssetWithHook(repo *repository.Repository, path, h
 	if err != nil {
 		return nil, err
 	}
-	// 写路径成功：同路径此前「确认不存在」的负缓存失效，新制品立即可见。
-	s.negCache.remove(repo.ID, path)
+	// 写路径成功：同路径此前「确认不存在」的负缓存失效（含父级 group），新制品立即可见。
+	s.invalidatePathWithGroups(repo.ID, path)
 	s.recordAssetPut(repo.Name, asset)
 	return asset, nil
 }
@@ -1082,7 +1090,7 @@ func (s *AssetService) resolve(ctx context.Context, repo *repository.Repository,
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
-	if s.negCache.hit(repo.ID, path) {
+	if !shouldBypassNegativeCache(ctx) && s.negCache.hit(repo.ID, path) {
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
@@ -1125,6 +1133,30 @@ func (s *AssetService) localGet(repo *repository.Repository, path string) (*repo
 	return asset, rc, nil
 }
 
+// localGetRecursive 递归读取仓库（含嵌套 group）的本地缓存：仅访问本地 SQLite 与 blob，不触发网络。
+func (s *AssetService) localGetRecursive(repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
+	if repo == nil || depth > maxResolveDepth {
+		return nil, nil, ErrNotFound
+	}
+	if repo.Type != "group" {
+		return s.localGet(repo, path)
+	}
+	cfg, err := repo.DecodeConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, memberName := range cfg.Members {
+		member, getErr := s.repos.GetByName(memberName)
+		if getErr != nil || member == nil || !member.Online {
+			continue
+		}
+		if asset, rc, localErr := s.localGetRecursive(member, path, depth+1); localErr == nil {
+			return asset, rc, nil
+		}
+	}
+	return nil, nil, ErrNotFound
+}
+
 // proxyGet 处理 proxy 仓库读：本地缓存命中即返回；未命中经 single-flight 收敛回源，
 // 流式落 blob 并 upsert asset（缓存）后再从本地读返回。
 // 上游处于 auto-block 阻止窗口时零连接快速失败（不发起上游连接，见 proxyHealth）。
@@ -1165,38 +1197,53 @@ func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository
 		return nil, nil, ErrUpstream
 	}
 
+	type sfOutcome struct {
+		failureStatus ResolveFailureStatus
+	}
 	key := fmt.Sprintf("%d\x00%s", repo.ID, path)
-	_, err, _ = s.sf.Do(key, func() (any, error) {
-		// 并发回源收敛：进入临界区先复查缓存，避免重复下载。
-		if _, e := s.assets.GetByPath(repo.ID, path); e == nil {
-			return nil, nil
-		}
-		// 角色切换与并发请求交错时再次校验，避免已排队的回源落入备用节点。
-		if s.requireBusinessWrite() != nil {
-			return nil, ErrNotFound
-		}
-		after, ferr := s.fetchProxyAsset(ctx, repo, path)
-		if ferr != nil {
-			return nil, ferr
-		}
-		if s.mutator != nil {
-			if err := s.mutator.Put(after); err != nil {
-				return nil, s.cleanupFailedWrite(after.BlobHash, err)
+	// 若同键领跑者因自身 ctx 取消（如 group 首字节看门狗或对端断开）而终止，
+	// 但当前调用方 ctx 仍未取消，则重试一次，避免领跑者取消污染其余并发行人。
+	for attempt := 0; attempt < 2; attempt++ {
+		rawVal, doErr, _ := s.sf.Do(key, func() (any, error) {
+			// 并发回源收敛：进入临界区先复查缓存，避免重复下载。
+			if _, e := s.assets.GetByPath(repo.ID, path); e == nil {
+				return sfOutcome{}, nil
 			}
-		} else if err := s.assets.Upsert(repo.ID, after.Path, after.BlobHash, after.Size, after.ContentType, after.Sha1, after.Md5); err != nil {
-			return nil, s.cleanupFailedWrite(after.BlobHash, err)
+			// 角色切换与并发请求交错时再次校验，避免已排队的回源落入备用节点。
+			if s.requireBusinessWrite() != nil {
+				return sfOutcome{failureStatus: ResolveFailureUncertain}, ErrNotFound
+			}
+			flightCtx := WithResolveFailure(ctx)
+			after, ferr := s.fetchProxyAsset(flightCtx, repo, path)
+			if ferr != nil {
+				return sfOutcome{failureStatus: ResolveFailureFromContext(flightCtx)}, ferr
+			}
+			if s.mutator != nil {
+				if err := s.mutator.Put(after); err != nil {
+					return sfOutcome{failureStatus: ResolveFailureUncertain}, s.cleanupFailedWrite(after.BlobHash, err)
+				}
+			} else if err := s.assets.Upsert(repo.ID, after.Path, after.BlobHash, after.Size, after.ContentType, after.Sha1, after.Md5); err != nil {
+				return sfOutcome{failureStatus: ResolveFailureUncertain}, s.cleanupFailedWrite(after.BlobHash, err)
+			}
+			s.releaseStagedBlob(after.BlobHash)
+			cached, err := s.assets.GetByPath(repo.ID, path)
+			if err != nil {
+				return sfOutcome{failureStatus: ResolveFailureUncertain}, err
+			}
+			s.invalidatePathWithGroups(repo.ID, path)
+			s.recordAssetPut(repo.Name, cached)
+			return sfOutcome{}, nil
+		})
+		if doErr != nil {
+			if attempt == 0 && errors.Is(doErr, context.Canceled) && ctx.Err() == nil {
+				continue
+			}
+			if out, ok := rawVal.(sfOutcome); ok && out.failureStatus != ResolveFailureUnknown {
+				recordResolveFailure(ctx, out.failureStatus)
+			}
+			return nil, nil, doErr
 		}
-		s.releaseStagedBlob(after.BlobHash)
-		cached, err := s.assets.GetByPath(repo.ID, path)
-		if err != nil {
-			return nil, err
-		}
-		s.negCache.remove(repo.ID, path)
-		s.recordAssetPut(repo.Name, cached)
-		return nil, nil
-	})
-	if err != nil {
-		return nil, nil, err
+		break
 	}
 	return s.localGet(repo, path)
 }
@@ -1227,7 +1274,8 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 	if !s.health.beginUpstream(repo.ID) {
 		return nil, ErrUpstream
 	}
-	body, header, err := s.upstream.FetchWithCredential(ctx, cfg.RemoteURL, path, cfg.CredentialRef)
+	fetchCtx := upstream.WithOutboundProxyID(ctx, cfg.OutboundProxyID)
+	body, header, err := s.upstream.FetchWithCredential(fetchCtx, cfg.RemoteURL, path, cfg.CredentialRef)
 	if err != nil {
 		// 错误分类统一走 classifyUpstreamFailure（与 ResolveOCIProxy 共用同一实现），
 		// 404 / 410 的豁免语义逐字保留，超时在此单列——慢不构成不可达证据。
@@ -1236,8 +1284,14 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 		// 在采样这一层摘出来（见 upstreamHealthCategoryFor 的说明），不改变上面的判定本身。
 		s.recordUpstreamHealthRequest(repo.ID, upstreamHealthCategoryFor(err, verdict.category), upstreamStarted)
 		switch verdict.kind {
+		case upstreamFailureCanceled:
+			// 客户端断开 / 同组其他成员已命中 / 看门狗取消：释放半开试探名额、不记阻断事件，
+			// 原样上抛取消，避免产生空 reason 指标或把领跑者取消伪装成上游故障。
+			recordResolveFailure(ctx, ResolveFailureUncertain)
+			s.health.releaseProbe(repo.ID)
+			return nil, err
 		case upstreamFailureNotFound:
-			s.negCache.add(repo.ID, path)
+			s.recordProxyNegativeCache(repo, cfg, path)
 			recordResolveFailure(ctx, ResolveFailureConfirmed)
 			// 上游可达但资源缺失：不据此改状态，但必须释放试探名额，否则后续请求被无限封锁。
 			s.health.releaseProbe(repo.ID)
@@ -1393,7 +1447,7 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 		if !s.health.beginUpstream(repo.ID) {
 			return nil, ErrUpstream
 		}
-		session, sessionErr := s.upstream.NewSession(cfg.RemoteURL, cfg.CredentialRef)
+		session, sessionErr := s.upstream.NewSessionWithProxy(cfg.RemoteURL, cfg.CredentialRef, cfg.OutboundProxyID)
 		if sessionErr != nil {
 			// 构造会话失败（地址不合法等）视同不可达：采样与断路器判定同源，不另判一次。
 			s.recordUpstreamHealthRequest(repo.ID, classifyUpstreamFailure(sessionErr).category, upstreamStarted)
@@ -1405,8 +1459,11 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 			// 与 fetchProxyAsset 共用同一分类判定（classifyUpstreamFailure）：
 			// 超时只记事件 + 释放名额，不阻断；其余非 404 维持 recordFailure。
 			verdict := classifyUpstreamFailure(fetchErr)
-			s.recordUpstreamHealthRequest(repo.ID, verdict.category, upstreamStarted)
+			s.recordUpstreamHealthRequest(repo.ID, upstreamHealthCategoryFor(fetchErr, verdict.category), upstreamStarted)
 			switch verdict.kind {
+			case upstreamFailureCanceled:
+				s.health.releaseProbe(repo.ID)
+				return nil, fetchErr
 			case upstreamFailureNotFound:
 				// 上游可达但资源缺失：不改状态，但必须释放试探名额。
 				s.health.releaseProbe(repo.ID)
@@ -1475,7 +1532,7 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 		if getErr != nil {
 			return nil, getErr
 		}
-		s.negCache.remove(repo.ID, path)
+		s.invalidatePathWithGroups(repo.ID, path)
 		s.recordAssetPut(repo.Name, cached)
 		return nil, nil
 	})
@@ -1598,7 +1655,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 		members[i] = member
 	}
 
-	// 阶段一：串行快查全部成员的本地缓存，保持成员优先级。
+	// 阶段一：串行快查全部成员（含嵌套 group）的本地缓存，保持成员优先级。
 	for _, member := range members {
 		if member == nil {
 			continue
@@ -1607,7 +1664,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			failed.Store(true)
 			continue
 		}
-		if asset, rc, localErr := s.localGet(member, path); localErr == nil {
+		if asset, rc, localErr := s.localGetRecursive(member, path, depth+1); localErr == nil {
 			return asset, rc, nil
 		}
 	}
@@ -1630,11 +1687,11 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			recordResolveFailureMember(ctx, member.Name, resolveFailureKindOffline)
 			continue
 		}
-		if member.Type != "proxy" {
+		if member.Type != "proxy" && member.Type != "group" {
 			recordResolveFailureMember(ctx, member.Name, resolveFailureKindNotProxy)
 			continue
 		}
-		if s.health.shouldBlock(member.ID) {
+		if member.Type == "proxy" && s.health.shouldBlock(member.ID) {
 			failed.Store(true)
 			recordResolveFailureMember(ctx, member.Name, resolveFailureKindBlocked)
 			continue
@@ -1647,7 +1704,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			recordResolveFailure(ctx, ResolveFailureUncertain)
 			return nil, nil, ErrUpstream
 		}
-		s.negCache.add(repo.ID, path)
+		s.recordGroupNegativeCache(repo, members, path)
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
@@ -1747,7 +1804,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 				}
 				return
 			}
-			// 该成员已把内容落盘并可本地读到：关闭本次读流，稍后按下标统一重新 localGet。
+			// 该成员已把内容落盘并可本地读到：关闭本次读流，稍后按下标统一重新 localGetRecursive。
 			_ = memberRC.Close()
 			results[j.idx] = true
 			cancel()
@@ -1757,7 +1814,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 
 	for i, ok := range results {
 		if ok {
-			asset, rc, localErr := s.localGet(members[i], path)
+			asset, rc, localErr := s.localGetRecursive(members[i], path, depth+1)
 			if localErr == nil {
 				return asset, rc, nil
 			}
@@ -1781,7 +1838,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrUpstream
 	}
-	s.negCache.add(repo.ID, path)
+	s.recordGroupNegativeCache(repo, members, path)
 	recordResolveFailure(ctx, ResolveFailureConfirmed)
 	return nil, nil, ErrNotFound
 }
@@ -1833,8 +1890,8 @@ func (s *AssetService) Delete(repoName, path string) error {
 	} else if err := s.assets.DeleteByPath(repo.ID, path); err != nil {
 		return mapNotFound(err)
 	}
-	// 写路径成功：失效同路径负缓存，避免删除后重传的制品被缓存 404 挡住。
-	s.negCache.remove(repo.ID, path)
+	// 写路径成功：失效同路径负缓存（含父级 group），避免删除后重传的制品被缓存 404 挡住。
+	s.invalidatePathWithGroups(repo.ID, path)
 	s.recordChange(EntityAsset, AssetKey(repoName, path), OpDelete, TombstoneData{Deleted: true})
 	return nil
 }
@@ -1950,10 +2007,23 @@ func mapUpstreamErr(err error) error {
 	}
 }
 
-// probeUpstream 后台探测上游可达性：与回源使用同一个安全客户端和凭据解析路径。
+// probeUpstream 后台探测上游可达性：与回源使用同一个安全客户端、凭据解析与出站代理路径。
 func (s *AssetService) probeUpstream(ctx context.Context, remoteURL, credentialRef string) error {
 	if s.upstream == nil {
 		return ErrUpstream
+	}
+	if repoID := probeRepoIDFromContext(ctx); repoID > 0 && s.repos != nil {
+		if repo, err := s.repos.GetByID(repoID); err == nil {
+			if cfg, decErr := repo.DecodeConfig(); decErr == nil {
+				if cfg.RemoteURL != "" {
+					remoteURL = cfg.RemoteURL
+				}
+				credentialRef = cfg.CredentialRef
+				if cfg.OutboundProxyID > 0 {
+					ctx = upstream.WithOutboundProxyID(ctx, cfg.OutboundProxyID)
+				}
+			}
+		}
 	}
 	status, err := s.upstream.ProbeWithCredential(ctx, remoteURL, credentialRef)
 	if err != nil {

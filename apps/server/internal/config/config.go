@@ -27,6 +27,8 @@ const (
 	EnvJWTSecret              = "JIAN_JWT_SECRET"
 	EnvMigrationCredentialKey = "JIAN_MIGRATION_CREDENTIAL_KEY"
 	EnvMfaFactorKey           = "JIAN_MFA_FACTOR_KEY"
+	EnvOutboundProxyKey       = "JIAN_OUTBOUND_PROXY_KEY"   // 出站代理节点凭据/配置 AES-256-GCM 专用密钥
+	EnvMihomoBin              = "JIAN_MIHOMO_BIN"           // 可选：mihomo 可执行文件路径；空则按 DataDir/bin 与 PATH 自动发现
 	EnvUpstreamTimeout        = "JIAN_UPSTREAM_TIMEOUT"     // proxy 回源整体超时，单位秒
 	EnvPublicURL              = "JIAN_PUBLIC_URL"           // 对外基础 URL；CDN 域名，隐藏源站 IP
 	EnvEnabledFormats         = "JIAN_ENABLED_FORMATS"      // 启用的协议格式，逗号分隔
@@ -219,6 +221,7 @@ const (
 	secretFileName                   = "jwt.secret"
 	migrationCredentialKeyFileName   = "migration-credential.key"
 	mfaFactorKeyFileName             = "mfa-factor.key"
+	outboundProxyKeyFileName         = "outbound-proxy.key"
 	replicationCredentialKeyFileName = "replication-credential.key"
 )
 
@@ -232,6 +235,8 @@ type Config struct {
 	JWTSecret              []byte          // JWT HS256 签名密钥（不入库、不打印）
 	MigrationCredentialKey []byte          // 在线迁移凭据 AES-256-GCM 专用密钥（不入库、不打印）
 	MfaFactorKey           []byte          // 强认证因子种子 AES-256-GCM 专用密钥（不入库、不打印、不复用 JWT 密钥）
+	OutboundProxyKey       []byte          // 出站代理节点配置 AES-256-GCM 专用密钥（不入库、不打印）
+	MihomoBin              string          // 可选：mihomo 可执行文件路径（空则自动发现）
 	UpstreamTimeout        time.Duration   // proxy 回源整体超时
 	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长：
 	// 首次失败的阻止窗口，之后每档翻倍。非正数（含非法值）已在解析期回落默认值。
@@ -416,6 +421,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	outboundProxyKey, err := loadOrCreateNamedKey(absData, EnvOutboundProxyKey, outboundProxyKeyFileName, "出站代理配置")
+	if err != nil {
+		return nil, err
+	}
 	enabledFormats, err := enabledFormats()
 	if err != nil {
 		return nil, err
@@ -439,6 +448,8 @@ func Load() (*Config, error) {
 		JWTSecret:                   secret,
 		MigrationCredentialKey:      migrationCredentialKey,
 		MfaFactorKey:                mfaFactorKey,
+		OutboundProxyKey:            outboundProxyKey,
+		MihomoBin:                   strings.TrimSpace(os.Getenv(EnvMihomoBin)),
 		UpstreamTimeout:             upstreamTimeout(),
 		AutoBlockBaseSeconds:        autoBlockBase(),
 		PublicURL:                   os.Getenv(EnvPublicURL),
