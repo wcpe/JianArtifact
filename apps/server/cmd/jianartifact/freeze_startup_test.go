@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,13 +78,21 @@ func TestOpenServicesSurvivesPersistedFreeze(t *testing.T) {
 		t.Errorf("遗留任务状态 = %q，期望 failed（启动自愈未执行）", got.Status)
 	}
 
-	// 断言 2：冻结语义没有被削弱——业务写仍必须被拒。
-	if err := second.freeze.RequireBusinessWrite(); err == nil {
-		t.Error("装配后冻结应仍然生效，但 RequireBusinessWrite 放行了")
+	// 断言 2：装配后的迁移服务确实挂着冻结闸门，且拒绝冻结期的用户写。
+	//
+	// 必须用 second.migrationSvc（openServices 真实装配的那个），不能自己
+	// NewMigrationService 再 SetBusinessWriteGate——那样等于测试自证：即使
+	// wiring.go 哪天漏了 SetBusinessWriteGate，用例依然会"因为手动装了闸门"而通过，
+	// 恰恰漏掉「装配是否真的装上了闸门」这个最该守的点。
+	//
+	// 用 Resume 而不是 Start：本用例里任务已被启动自愈回收成 failed，Start 只接受
+	// planned，会因状态不符报 ErrConflict——那样无论闸门有没有装都会报错，测不出东西。
+	// Resume 对 failed 是合法操作，因此报错只可能来自冻结闸门。
+	userMig := second.migrationSvc
+	if _, err := userMig.Resume(task.ID); !errors.Is(err, domain.ErrWriteFrozen) {
+		t.Errorf("冻结期用户发起 Resume 应被拒为 ErrWriteFrozen，实际：%v", err)
 	}
-	userMig := domain.NewMigrationService(repository.NewMigrationTaskRepo(second.db), nil)
-	userMig.SetBusinessWriteGate(second.freeze)
-	if _, err := userMig.Start(task.ID, nil); err == nil {
-		t.Error("冻结期间用户发起的迁移写应被拒绝")
+	if _, err := userMig.Cancel(task.ID); !errors.Is(err, domain.ErrWriteFrozen) {
+		t.Errorf("冻结期用户发起 Cancel 应被拒为 ErrWriteFrozen，实际：%v", err)
 	}
 }
