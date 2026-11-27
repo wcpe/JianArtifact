@@ -425,10 +425,22 @@ func (s *MigrationService) Resume(id int64) (*repository.MigrationTask, error) {
 }
 
 // FailInterruptedRunning 启动回收：running → failed。
+//
+// **刻意不受写入冻结闸门约束**，尽管它确实会改库。理由：这是**启动自愈**，不是业务写。
+//
+// 冻结的语义是「搬迁窗口期停掉对外业务的写」，它约束的是**用户发起**的写入。而本方法
+// 只在进程启动时执行一次，把上个进程崩溃留下的 running 任务标成 failed，等人工 resume。
+// 它不产生任何业务数据变更，只把「一个已经不存在的进程声称仍在跑」的状态纠正为真相。
+//
+// 先前的实现先过 requireBusinessWrite(writeGate)，在冻结状态持久化（write-freeze.json）
+// 落地后构成**启动死锁**：冻结中重启 → 回读到 frozen=true → 启动自愈被自己挡下 →
+// openServices 返回错误 → 进程退出 → systemd 重启 → 再次回读同一份文件……无限循环，
+// 服务再也起不来。而「冻结 → 备份 → 重启 → 解冻」恰恰是搬迁的标准流程，重启是正常步骤，
+// 不是异常路径——把自愈挡在冻结之后，等于让正常流程把服务锁死。
+//
+// 不担心这里被滥用：本方法没有对外入口，只有启动路径调用它；冻结期间用户能发起的
+// 迁移写（discover/start/resume/cancel）仍然全部经过闸门，语义不变。
 func (s *MigrationService) FailInterruptedRunning() (int64, error) {
-	if err := requireBusinessWrite(s.writeGate); err != nil {
-		return 0, err
-	}
 	return s.tasks.FailInterruptedRunning("进程中断，请 resume")
 }
 

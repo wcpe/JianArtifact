@@ -574,3 +574,86 @@ func TestMigrationServiceInvalidSource(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// TestMigrationServiceFailInterruptedIgnoresFreeze 钉住启动自愈不受写入冻结约束。
+//
+// 回归背景：FailInterruptedRunning 曾先过 requireBusinessWrite(writeGate)。冻结状态
+// 持久化（write-freeze.json）落地后，这条组合构成启动死锁——冻结中重启会回读到
+// frozen=true，于是启动自愈被自己挡下，openServices 返回错误、进程退出、systemd 重启、
+// 再次回读同一份文件，形成无限重启。而「冻结 → 备份 → 重启 → 解冻」是搬迁的标准流程，
+// 重启是正常步骤，冻结不该把服务锁死在这个环节。
+//
+// 本用例用真实的 FreezeController（已冻结）作闸门：若启动自愈重新被闸门挡住，n 会是 0
+// 且返回 ErrWriteFrozen，测试立即失败。
+func TestMigrationServiceFailInterruptedIgnoresFreeze(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	repo := repository.NewMigrationTaskRepo(db)
+
+	// 未冻结时先建一个 running 任务（建/启动本身要过闸门，所以顺序不能倒）。
+	svc := domain.NewMigrationService(repo, nil)
+	task, err := svc.Create(domain.MigrationCreateInput{
+		SourceType:   repository.MigrationSourceOfflineDir,
+		SourceConfig: map[string]any{"path": "/x"},
+	})
+	if err != nil {
+		t.Fatalf("Create：%v", err)
+	}
+	if _, err := svc.Start(task.ID, nil); err != nil {
+		t.Fatalf("Start：%v", err)
+	}
+
+	// 冻结后换用同一个实例：模拟「冻结窗口内进程重启」——启动自愈跑在已冻结的闸门下。
+	freeze := domain.NewFreezeController(nil)
+	// Freeze 无 error 返回，只回状态；冻结一定成功。
+	_ = freeze.Freeze(time.Now().Add(time.Hour), "测试冻结")
+	svc.SetBusinessWriteGate(freeze)
+
+	n, err := svc.FailInterruptedRunning()
+	if err != nil {
+		t.Fatalf("启动自愈不应被冻结挡住，却返回错误：%v", err)
+	}
+	if n != 1 {
+		t.Fatalf("回收数 = %d，期望 1", n)
+	}
+	got, err := svc.Get(task.ID)
+	if err != nil {
+		t.Fatalf("Get：%v", err)
+	}
+	if got.Status != repository.MigrationStatusFailed {
+		t.Fatalf("状态 = %q，期望 failed", got.Status)
+	}
+}
+
+// TestMigrationServiceUserWritesStillBlockedWhenFrozen 守住豁免的边界：
+// 只放行启动自愈，**用户发起**的迁移写仍必须被冻结拒绝。
+// 没有这条，上面的豁免很容易被顺手扩大到所有迁移操作。
+func TestMigrationServiceUserWritesStillBlockedWhenFrozen(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	repo := repository.NewMigrationTaskRepo(db)
+
+	svc := domain.NewMigrationService(repo, nil)
+	task, err := svc.Create(domain.MigrationCreateInput{
+		SourceType:   repository.MigrationSourceOfflineDir,
+		SourceConfig: map[string]any{"path": "/x"},
+	})
+	if err != nil {
+		t.Fatalf("Create：%v", err)
+	}
+
+	freeze := domain.NewFreezeController(nil)
+	// Freeze 无 error 返回，只回状态；冻结一定成功。
+	_ = freeze.Freeze(time.Now().Add(time.Hour), "测试冻结")
+	svc.SetBusinessWriteGate(freeze)
+
+	if _, err := svc.Start(task.ID, nil); !errors.Is(err, domain.ErrWriteFrozen) {
+		t.Errorf("冻结期 Start 应被拒为 ErrWriteFrozen，实际 %v", err)
+	}
+	if _, err := svc.Resume(task.ID); !errors.Is(err, domain.ErrWriteFrozen) {
+		t.Errorf("冻结期 Resume 应被拒为 ErrWriteFrozen，实际 %v", err)
+	}
+	if _, err := svc.Cancel(task.ID); !errors.Is(err, domain.ErrWriteFrozen) {
+		t.Errorf("冻结期 Cancel 应被拒为 ErrWriteFrozen，实际 %v", err)
+	}
+}
