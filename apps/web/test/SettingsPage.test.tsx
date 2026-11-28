@@ -10,6 +10,11 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   putSettings: vi.fn(),
   getSettingHistory: vi.fn(),
+  listOutboundProxies: vi.fn(),
+  createOutboundProxy: vi.fn(),
+  updateOutboundProxy: vi.fn(),
+  deleteOutboundProxy: vi.fn(),
+  testOutboundProxy: vi.fn(),
 }));
 
 vi.mock("../src/api/endpoints", () => api);
@@ -59,6 +64,14 @@ describe("设置页", () => {
       .mockImplementation((patch: Record<string, unknown>) =>
         Promise.resolve({ ...baseSettings, ...patch }),
       );
+    api.listOutboundProxies.mockReset().mockResolvedValue({
+      items: [],
+      mihomoAvailable: false,
+    });
+    api.createOutboundProxy.mockReset();
+    api.updateOutboundProxy.mockReset();
+    api.deleteOutboundProxy.mockReset();
+    api.testOutboundProxy.mockReset();
   });
 
   it("只展示可保存服务设置，不暴露集群或部署字段", async () => {

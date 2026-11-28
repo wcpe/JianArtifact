@@ -133,6 +133,18 @@ func (r *RepoRepo) ListByTypeAndOnline(repoType string, online bool) ([]Reposito
 	return repos, err
 }
 
+// ListAllForGroupGraph 返回全部仓库的 id/name/type/config（无分页、无 LIMIT）。
+//
+// 专供负缓存的父 group 反查：它需要「全部仓库」才能建完整的成员图，
+// 而 List(limit, offset) 的固定上限会让大部署静默丢掉超出窗口的父边
+// （丢了边 → 级联失效不触发 → 成员已恢复但聚合仓仍返回 404，且没有任何日志）。
+// 只取建图必需的 4 列，避免把 description/visibility 等无关列读回来。
+func (r *RepoRepo) ListAllForGroupGraph() ([]Repository, error) {
+	var repos []Repository
+	err := r.db.Select(&repos, `SELECT id, name, type, config FROM repository ORDER BY id`)
+	return repos, err
+}
+
 // ListByIDs 按 ID 批量取仓库元数据，返回以 ID 为键的映射。
 //
 // 与 ListByNames 一样把查询次数固定为 1 条（IN 查询），与 ID 个数无关；解析不到的 ID

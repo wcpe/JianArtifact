@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -87,6 +88,7 @@ type appServices struct {
 	upstreamHealthSvc   *domain.UpstreamHealthService  // 上游健康历史采样
 	upstreamHealthRepo  *repository.UpstreamHealthRepo // 上游健康历史读写（查询端点 + 保留清理）
 	upstreamProbeSvc    *domain.UpstreamProbeService   // upstream-probe 调度作业
+	outboundProxySvc    *domain.OutboundProxyService   // 全局出站代理池与受管 Mihomo 生命周期
 	oidcDeps            *api.OIDCDeps                  // OIDC 登录端点依赖（nil = 未启用）
 	ldapAuth            api.LDAPAuthenticator          // LDAP 目录侧校验（nil = 未启用）
 }
@@ -178,6 +180,24 @@ func openServices(cfg *config.Config, opts ...serviceOption) (*appServices, erro
 	// 装配层从未调用，负缓存 TTL 实际是一个运行时改不了的常量，这里是它第一次真正接线。
 	assetSvc.SetNegativeCacheTTL(cfg.NegativeCacheTTL)
 	repoSvc.SetMutationCoordinator(assetSvc.MutationCoordinator())
+	repoSvc.SetNegativeCacheInvalidator(func(repoID int64) {
+		assetSvc.InvalidateRepoNegativeCache(repoID)
+	})
+	outboundProxyRepo := repository.NewOutboundProxyRepo(db)
+	mihomoMgr := upstream.NewMihomoManager(cfg.MihomoBin, cfg.DataDir)
+	// 启动期清扫上次运行遗留的 mihomo 工作目录（含明文节点配置）：
+	// 正常关停会删，但 SIGKILL/panic/断电会留下 config.yaml，且不在 storage-cleanup 的扫描范围内。
+	// 此刻本进程尚未启动任何子进程，目录里的内容一定不属于存活实例，删除是安全的。
+	if removed := mihomoMgr.CleanupStaleWorkDirs(); removed > 0 {
+		fmt.Fprintf(os.Stderr, "已清理 %d 个遗留的 mihomo 工作目录（含节点配置副本）。\n", removed)
+	}
+	outboundProxySvc, err := domain.NewOutboundProxyService(outboundProxyRepo, repoRepo, cfg.OutboundProxyKey, mihomoMgr)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化出站代理服务：%w", err)
+	}
+	upstreamClient.SetProxyResolver(outboundProxySvc.ResolveTransport)
+	repoSvc.SetOutboundProxyValidator(outboundProxySvc.Exists)
 	// 全局共享的冻结控制器。复制退役后不再有角色派生的静态只读栅栏，
 	// 底座传 nil；冻结窗口（搬迁切换用）由该实例统一承载。
 	// 所有写栅栏必须装同一个 freeze 实例：只要有一个服务仍挂静态栅栏，冻结期间就
@@ -194,6 +214,7 @@ func openServices(cfg *config.Config, opts ...serviceOption) (*appServices, erro
 	settingSvc.SetBusinessWriteGate(freeze)
 	repoSvc.SetBusinessWriteGate(freeze)
 	assetSvc.SetBusinessWriteGate(freeze)
+	outboundProxySvc.SetBusinessWriteGate(freeze)
 	// 导入编排（校验 → 合并 blob → 暂存 db → 写 restore.pending）；
 	// 真正的数据库替换由启动期 ApplyPendingRestore 在 persistence.Open 之前完成。
 	restoreSvc := domain.NewRestoreService(db, cfg.DataDir, cfg.DBPath, cfg.BlobDir)
@@ -658,6 +679,7 @@ func openServices(cfg *config.Config, opts ...serviceOption) (*appServices, erro
 		upstreamHealthSvc:   upstreamHealthSvc,
 		upstreamHealthRepo:  upstreamHealthRepo,
 		upstreamProbeSvc:    upstreamProbeSvc,
+		outboundProxySvc:    outboundProxySvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
 		settingSvc:          settingSvc,
@@ -983,6 +1005,8 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		CleanTasks:              s.cleanTaskRepo,      // 清理任务队列只读查询
 		Trash:                   s.trashSvc,           // 回收站（恢复 / 彻底删除 / 清空）
 		UpstreamHealth:          s.upstreamHealthRepo, // 上游健康历史查询
+		OutboundProxies:         s.outboundProxySvc,   // 全局出站代理池与受管 Mihomo
+		UpstreamClient:          s.upstreamClient,     // 回源客户端（供代理连通性探测复用）
 		MaintenanceJobs:         s.scheduler,          // 维护作业清单与手动触发
 		Restart:                 s.restartSvc,         // 一键重启（先回响应，再重启）
 		OnUpstreamTimeoutChange: func(d time.Duration) {

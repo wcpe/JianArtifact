@@ -4005,6 +4005,117 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/outbound-proxies:
+    get:
+      operationId: listOutboundProxies
+      summary: 查询全局出站代理池与 Mihomo 运行时能力（仅管理员）
+      responses:
+        "200":
+          description: 出站代理列表与本机 Mihomo 可用状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createOutboundProxy
+      summary: 新增全局出站代理（仅管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOutboundProxyRequest"
+      responses:
+        "201":
+          description: 创建成功（仅回显脱敏预览，不返回密文或凭据）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/outbound-proxies/{id}:
+    put:
+      operationId: updateOutboundProxy
+      summary: 更新全局出站代理（仅管理员）
+      parameters:
+        - $ref: "#/components/parameters/OutboundProxyIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOutboundProxyRequest"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteOutboundProxy
+      summary: 删除全局出站代理（仅管理员；若仍有仓库引用则返回 409）
+      parameters:
+        - $ref: "#/components/parameters/OutboundProxyIdParam"
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/outbound-proxies/{id}/test:
+    post:
+      operationId: testOutboundProxy
+      summary: 测试出站代理到目标公网地址的连通性（仅管理员）
+      parameters:
+        - $ref: "#/components/parameters/OutboundProxyIdParam"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestOutboundProxyRequest"
+      responses:
+        "200":
+          description: 探测结果（含延迟与上游状态码）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestOutboundProxyResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     bearerAuth:
@@ -4033,6 +4144,14 @@ components:
       name: id
       in: path
       required: true
+      schema:
+        type: integer
+        format: int64
+    OutboundProxyIdParam:
+      name: id
+      in: path
+      required: true
+      description: 全局出站代理 ID
       schema:
         type: integer
         format: int64
@@ -7141,6 +7260,19 @@ components:
           type: string
           pattern: "^[A-Z][A-Z0-9_]{0,62}$"
           description: proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
+        outboundProxyId:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 挂载的全局出站代理 ID（仅 type=proxy；0 或缺省表示直连）
+        outboundProxyName:
+          type: string
+          description: 挂载的全局出站代理名称（只读展示字段，仅管理员可见）
+        negativeCacheTtlSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          description: proxy 仓库级 404 负缓存 TTL 覆盖（秒）；缺省表示继承全局配置，0 表示对该仓库关闭负缓存
         immutableRelease:
           type: boolean
           description: hosted 仓库是否拒绝覆盖已存在的 Release
@@ -7273,6 +7405,16 @@ components:
           type: string
           pattern: "^[A-Z][A-Z0-9_]{0,62}$"
           description: proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
+        outboundProxyId:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 可选：为 proxy 仓库挂载的全局出站代理 ID（0 或缺省表示直连）
+        negativeCacheTtlSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          description: 可选：proxy 仓库级 404 负缓存 TTL 覆盖（秒）；缺省继承全局，0 关闭负缓存
         immutableRelease:
           type: boolean
           description: 创建 hosted 仓库时是否拒绝覆盖已存在的 Release
@@ -7322,6 +7464,16 @@ components:
           type: string
           pattern: "^[A-Z][A-Z0-9_]{0,62}$"
           description: 更新 proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
+        outboundProxyId:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 更新 proxy 仓库挂载的全局出站代理 ID（传 0 表示解除挂载改为直连；缺省表示不修改）
+        negativeCacheTtlSeconds:
+          type: integer
+          minimum: -1
+          maximum: 3600
+          description: 更新 proxy 仓库级 404 负缓存 TTL（秒）：传 -1 恢复继承全局，传 0 关闭负缓存，传 1..3600 设自定义秒数；缺省表示不修改
         immutableRelease:
           type: boolean
           description: 更新 hosted 仓库是否拒绝覆盖已存在的 Release
@@ -9294,3 +9446,132 @@ components:
           type: string
           pattern: "^[0-9a-f]{64}$"
           description: 可选：拉取完成后核对的归档摘要。
+    OutboundProxyKind:
+      type: string
+      enum: [http, socks5, mihomo]
+      description: 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
+    OutboundProxy:
+      type: object
+      required:
+        [
+          id,
+          name,
+          kind,
+          description,
+          endpointPreview,
+          enabled,
+          boundRepositories,
+          createdAt,
+          updatedAt,
+        ]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        kind:
+          $ref: "#/components/schemas/OutboundProxyKind"
+        description:
+          type: string
+        endpointPreview:
+          type: string
+          description: 脱敏后的代理端点预览（不含密码、UUID、公钥或令牌）
+        enabled:
+          type: boolean
+        boundRepositories:
+          type: array
+          items:
+            type: string
+          description: 当前挂载该出站代理的 proxy 仓库主名列表
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    OutboundProxyList:
+      type: object
+      required: [items, mihomoAvailable]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutboundProxy"
+        mihomoAvailable:
+          type: boolean
+          description: 宿主机是否已检测到可用的 mihomo / clash-meta 可执行文件
+        mihomoVersion:
+          type: string
+          description: 检测到的 mihomo 版本信息（不可用时省略）
+        mihomoBinary:
+          type: string
+          description: 检测到的 mihomo 二进制路径（不可用时省略）
+    CreateOutboundProxyRequest:
+      type: object
+      required: [name, kind, config]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        kind:
+          $ref: "#/components/schemas/OutboundProxyKind"
+        description:
+          type: string
+          maxLength: 500
+        config:
+          type: string
+          minLength: 1
+          description: |
+            代理配置内容（服务端加密落库、绝不回显）：
+            - http：http://[user:pass@]host:port 或 https://...
+            - socks5：socks5://[user:pass@]host:port 或 socks5h://...
+            - mihomo：单节点分享链接（vless/vmess/trojan/ss/hysteria2/hy2/tuic/anytls）或 Clash/Mihomo YAML 节点片段
+        enabled:
+          type: boolean
+          default: true
+    UpdateOutboundProxyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        kind:
+          $ref: "#/components/schemas/OutboundProxyKind"
+        description:
+          type: string
+          maxLength: 500
+        config:
+          type: string
+          description: 可选：新的代理配置；留空且未切换 kind 时沿用已保存的加密配置
+        enabled:
+          type: boolean
+    TestOutboundProxyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        targetUrl:
+          type: string
+          maxLength: 2048
+          description: 可选：测试目标公网 http/https URL（默认 https://libraries.minecraft.net/）
+    TestOutboundProxyResult:
+      type: object
+      required: [ok, latencyMs, message]
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+        statusCode:
+          type: integer
+          description: 目标上游返回的 HTTP 状态码（建连失败时省略）
+        latencyMs:
+          type: integer
+          format: int64
+        message:
+          type: string

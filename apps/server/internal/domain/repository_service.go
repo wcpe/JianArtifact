@@ -49,6 +49,10 @@ type RepositoryService struct {
 	// 降级为播种初值），写入发生在 HTTP 处理 goroutine、读取发生在并发的搜索请求里。
 	// 普通字段就是数据竞态——-race 会抓到，生产上则表现为"偶发读到半个值"这种更难查的形态。
 	searchTimeoutNanos atomic.Int64
+	// outboundProxyExists 校验出站代理 ID 是否存在（wiring 注入 OutboundProxyService.Exists；nil 表示不做存在性校验）。
+	outboundProxyExists func(int64) (bool, error)
+	// negCacheInvalidator 在仓库配置更新或重新上线时级联失效本仓及父级 group 的 404 负缓存。
+	negCacheInvalidator func(int64)
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
@@ -57,6 +61,16 @@ func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, 
 	s := &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default()}
 	s.searchTimeoutNanos.Store(int64(searchTimeoutDefault))
 	return s
+}
+
+// SetOutboundProxyValidator 注入出站代理存在性校验回调。
+func (s *RepositoryService) SetOutboundProxyValidator(fn func(int64) (bool, error)) {
+	s.outboundProxyExists = fn
+}
+
+// SetNegativeCacheInvalidator 注入仓库负缓存级联失效回调（配置变更/重新上线时触发）。
+func (s *RepositoryService) SetNegativeCacheInvalidator(fn func(int64)) {
+	s.negCacheInvalidator = fn
 }
 
 // SetSearchTimeout 注入检索语句的预算上限（覆盖范围见 searchContext）。
@@ -421,6 +435,9 @@ func (s *RepositoryService) Update(name, visibility string, description *string,
 		if err := s.repos.UpdateConfig(repo.Name, configJSON); err != nil {
 			return nil, mapNotFound(err)
 		}
+		if s.negCacheInvalidator != nil {
+			s.negCacheInvalidator(repo.ID)
+		}
 	}
 	if description != nil {
 		if err := s.repos.UpdateDescription(repo.Name, *description); err != nil {
@@ -527,13 +544,19 @@ func (s *RepositoryService) SetOnline(name string, online bool) error {
 	if err := s.repos.SetOnline(repo.Name, online); err != nil {
 		return mapNotFound(err)
 	}
+	if online && s.negCacheInvalidator != nil {
+		s.negCacheInvalidator(repo.ID)
+	}
 	return nil
 }
 
 // validateConfig 校验仓库配置，按仓库类型校验结构化配置：
-//   - hosted：remoteUrl、credentialRef 与 members 均须为空；
-//   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，credentialRef 可选且必须是环境变量引用名；
-//   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，remoteUrl、credentialRef 与 immutableRelease 须为空或 false。
+//   - hosted：remoteUrl、credentialRef、outboundProxyId、negativeCacheTtlSeconds 与 members 均须为空；
+//   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，
+//     credentialRef 可选且必须是环境变量引用名，outboundProxyId 可选且必须指向已存在的出站代理，
+//     negativeCacheTtlSeconds 可选（0=关闭，1..3600=自定义秒数）；
+//   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，
+//     remoteUrl、credentialRef、outboundProxyId、negativeCacheTtlSeconds 与 immutableRelease 须为空或 false。
 //
 // cacheRetentionDays（代理缓存保留）只对 proxy 有意义，hosted/group 必须为 0，
 // proxy 上 0 = 关闭（默认）且不接受负数；存储配额 quotaBytes/quotaAssets 为仓库级上限，
@@ -545,9 +568,15 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 	if cfg.QuotaBytes < 0 || cfg.QuotaAssets < 0 {
 		return fmt.Errorf("%w: 存储配额不能为负数", ErrValidation)
 	}
+	if cfg.OutboundProxyID < 0 {
+		return fmt.Errorf("%w: 出站代理 ID 非法", ErrValidation)
+	}
+	if cfg.NegativeCacheTTLSeconds != nil && (*cfg.NegativeCacheTTLSeconds < 0 || *cfg.NegativeCacheTTLSeconds > 3600) {
+		return fmt.Errorf("%w: 负缓存 TTL 须在 0-3600 秒之间", ErrValidation)
+	}
 	switch typ {
 	case "hosted":
-		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || len(cfg.Members) > 0 || cfg.CacheRetentionDays != 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.OutboundProxyID != 0 || cfg.NegativeCacheTTLSeconds != nil || len(cfg.Members) > 0 || cfg.CacheRetentionDays != 0 {
 			return ErrValidation
 		}
 	case "proxy":
@@ -568,8 +597,17 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 		if cfg.CredentialRef != "" && !validCredentialRef(cfg.CredentialRef) {
 			return ErrValidation
 		}
+		if cfg.OutboundProxyID > 0 && s.outboundProxyExists != nil {
+			exists, err := s.outboundProxyExists(cfg.OutboundProxyID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("%w: 指定的出站代理不存在", ErrValidation)
+			}
+		}
 	case "group":
-		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.ImmutableRelease || len(cfg.Members) == 0 || cfg.CacheRetentionDays != 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.OutboundProxyID != 0 || cfg.NegativeCacheTTLSeconds != nil || cfg.ImmutableRelease || len(cfg.Members) == 0 || cfg.CacheRetentionDays != 0 {
 			return ErrValidation
 		}
 		if cfg.QuotaBytes != 0 || cfg.QuotaAssets != 0 {
@@ -588,6 +626,13 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 				return ErrValidation
 			}
 		}
+		// 成环检测：group 允许嵌套 group，读路径会按成员递归下发回源。
+		// 若允许 A→B 与 B→A 共存，单个请求就会按分支因子在 16 层深度内指数放大
+		// （2-环约 2^16 个 goroutine 与同量级本地查询），构成可被配置触发的自我 DoS。
+		// 这里在写入侧拒绝，读路径另带 visited 兜底（防止历史脏数据）。
+		if err := s.validateGroupAcyclic(name, cfg.Members); err != nil {
+			return err
+		}
 	default:
 		// 未知类型交由持久化层的 CHECK 约束拒绝（返回后映射为内部错误）。
 	}
@@ -597,6 +642,61 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 func validateFormatType(format, typ string) error {
 	if format == "gomod" && typ != "proxy" {
 		return ErrValidation
+	}
+	return nil
+}
+
+// maxGroupMembershipDepth 限制 group 嵌套的可达深度，与读路径的 maxResolveDepth 对齐：
+// 写入侧若允许更深的结构，读路径会在超深处直接判「不存在」，把结构错误伪装成 404。
+const maxGroupMembershipDepth = maxResolveDepth
+
+// validateGroupAcyclic 判定「把 members 挂到名为 groupName 的 group 上」之后是否会形成环。
+//
+// 判定方式是沿 members 向下的现有多层 group 做 DFS，只要触及 groupName 本身就成环。
+// 之所以不能只看直接成员：A→B→C 之后再把 C 的成员加回 A 是合法的两步操作，
+// 只有沿成员链走到底才能发现。
+//
+// 未建成的仓库（成员名解析不到）不参与判定——它们在后续步骤里自己会被创建，
+// 且届时各自的 validateConfig 会重新校验，这里不抢先报错。
+func (s *RepositoryService) validateGroupAcyclic(groupName string, members []string) error {
+	// visited 记录本次已经展开过的 group，避免菱形成员结构被重复展开成指数遍历。
+	// 它不参与「是否成环」判定（那只由 groupName 本身命中决定），只做剪枝。
+	visited := map[string]bool{}
+	var walk func(name string, depth int) error
+	walk = func(name string, depth int) error {
+		if depth > maxGroupMembershipDepth {
+			return fmt.Errorf("%w: group 嵌套层级超过 %d 层", ErrValidation, maxGroupMembershipDepth)
+		}
+		// 命中调用者自身即闭环。
+		if name == groupName {
+			return fmt.Errorf("%w: group 成员存在循环引用", ErrValidation)
+		}
+		if visited[name] {
+			return nil
+		}
+		visited[name] = true
+		repo, err := s.repos.GetByName(name)
+		if err != nil || repo == nil || repo.Type != "group" {
+			return nil
+		}
+		cfg, decErr := repo.DecodeConfig()
+		if decErr != nil {
+			return nil
+		}
+		for _, child := range cfg.Members {
+			if child == "" {
+				continue
+			}
+			if err := walk(child, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, m := range members {
+		if err := walk(m, 1); err != nil {
+			return err
+		}
 	}
 	return nil
 }

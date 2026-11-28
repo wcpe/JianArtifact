@@ -91,6 +91,12 @@ import type {
   UserRole,
   UserStatus,
   MaintenanceRestartResult,
+  OutboundProxy,
+  OutboundProxyList,
+  CreateOutboundProxyRequest,
+  UpdateOutboundProxyRequest,
+  TestOutboundProxyRequest,
+  TestOutboundProxyResult,
 } from "./types";
 
 export interface OperationsObservabilityQuery {
@@ -446,6 +452,10 @@ export function createRepository(input: {
   visibility: RepoVisibility;
   description?: string;
   remoteUrl?: string;
+  /** 可选：挂载的全局出站代理 ID（仅 type=proxy；0 / 缺省表示直连）。 */
+  outboundProxyId?: number;
+  /** 可选：proxy 仓库级 404 负缓存 TTL（秒；缺省继承全局，0 关闭负缓存）。 */
+  negativeCacheTtlSeconds?: number;
   members?: string[];
   /** 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）。 */
   aliases?: string[];
@@ -465,6 +475,10 @@ export function updateRepository(
     visibility?: RepoVisibility;
     description?: string;
     remoteUrl?: string;
+    /** 更新挂载的全局出站代理 ID（仅 type=proxy；传 0 表示直连，缺省不改）。 */
+    outboundProxyId?: number;
+    /** 更新仓库级 404 负缓存 TTL（仅 type=proxy；-1 恢复继承全局，0 关闭，1..3600 自定义）。 */
+    negativeCacheTtlSeconds?: number;
     members?: string[];
     /** 覆盖式更新别名集合（空数组表示清空；与主名共享命名空间、全局唯一）。 */
     aliases?: string[];
@@ -2370,5 +2384,47 @@ export async function markSecurityCaseRead(
   return request(`/security/cases/${encodeURIComponent(caseId)}/read`, {
     method: "PUT",
     body: JSON.stringify(body),
+  });
+}
+
+// —— 全局出站代理池与 Mihomo 协议 ——
+
+/** 查询全局出站代理池与本机 Mihomo 运行时能力（仅管理员）。 */
+export function listOutboundProxies(): Promise<OutboundProxyList> {
+  return request<OutboundProxyList>("/outbound-proxies");
+}
+
+/** 新增全局出站代理（仅管理员；凭据/节点配置加密落库，响应只回显脱敏预览）。 */
+export function createOutboundProxy(input: CreateOutboundProxyRequest): Promise<OutboundProxy> {
+  return request<OutboundProxy>("/outbound-proxies", {
+    method: "POST",
+    body: input,
+  });
+}
+
+/** 更新全局出站代理（仅管理员）。 */
+export function updateOutboundProxy(
+  id: number,
+  input: UpdateOutboundProxyRequest,
+): Promise<OutboundProxy> {
+  return request<OutboundProxy>(`/outbound-proxies/${id}`, {
+    method: "PUT",
+    body: input,
+  });
+}
+
+/** 删除全局出站代理（仅管理员；若仍有仓库引用将返回 409）。 */
+export function deleteOutboundProxy(id: number): Promise<void> {
+  return request<void>(`/outbound-proxies/${id}`, { method: "DELETE" });
+}
+
+/** 通过指定出站代理测试到公网目标地址的连通性（仅管理员）。 */
+export function testOutboundProxy(
+  id: number,
+  input: TestOutboundProxyRequest = {},
+): Promise<TestOutboundProxyResult> {
+  return request<TestOutboundProxyResult>(`/outbound-proxies/${id}/test`, {
+    method: "POST",
+    body: input,
   });
 }

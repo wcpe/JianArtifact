@@ -21,6 +21,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 const (
@@ -380,7 +381,7 @@ func (s *CargoService) proxyIndex(ctx context.Context, repo *repository.Reposito
 		if _, _, cachedErr := s.assets.localGet(repo, indexPath); cachedErr == nil {
 			return nil, nil
 		}
-		body, _, fetchErr := s.assets.upstream.FetchWithCredential(ctx, cfg.RemoteURL, indexPath, cfg.CredentialRef)
+		body, _, fetchErr := s.assets.upstream.FetchWithCredential(upstream.WithOutboundProxyID(ctx, cfg.OutboundProxyID), cfg.RemoteURL, indexPath, cfg.CredentialRef)
 		if fetchErr != nil {
 			return nil, mapUpstreamErr(fetchErr)
 		}
@@ -450,7 +451,7 @@ func (s *CargoService) proxyDownload(ctx context.Context, repo *repository.Repos
 		if urlErr != nil {
 			return nil, ErrUpstream
 		}
-		body, _, fetchErr := s.assets.upstream.FetchWithCredential(ctx, downloadURL, "", cfg.CredentialRef)
+		body, _, fetchErr := s.assets.upstream.FetchWithCredential(upstream.WithOutboundProxyID(ctx, cfg.OutboundProxyID), downloadURL, "", cfg.CredentialRef)
 		if fetchErr != nil {
 			return nil, mapUpstreamErr(fetchErr)
 		}
@@ -474,7 +475,7 @@ func (s *CargoService) proxyDownload(ctx context.Context, repo *repository.Repos
 }
 
 func (s *CargoService) proxyDownloadTemplate(ctx context.Context, cfg repository.RepositoryConfig) (string, error) {
-	body, _, err := s.assets.upstream.FetchWithCredential(ctx, cfg.RemoteURL, "config.json", cfg.CredentialRef)
+	body, _, err := s.assets.upstream.FetchWithCredential(upstream.WithOutboundProxyID(ctx, cfg.OutboundProxyID), cfg.RemoteURL, "config.json", cfg.CredentialRef)
 	if err != nil {
 		return "", mapUpstreamErr(err)
 	}

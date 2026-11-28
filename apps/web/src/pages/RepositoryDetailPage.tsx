@@ -44,6 +44,7 @@ import {
   getAcl,
   getRepositoryDownloadTrend,
   listAllRepositories,
+  listOutboundProxies,
   listUserGroups,
   listUsers,
   recheckConnection,
@@ -412,6 +413,10 @@ function ConfigTab({
   const [quotaAssetsText, setQuotaAssetsText] = useState("0");
   //  代理缓存保留天数（仅 proxy 仓库可设）；0 或留空 = 关闭（不自动清理）。
   const [cacheRetentionText, setCacheRetentionText] = useState("0");
+  //  proxy 仓库挂载的出站代理 ID（"0" 表示直连）与 404 负缓存策略。
+  const [outboundProxyId, setOutboundProxyId] = useState("0");
+  const [negCacheMode, setNegCacheMode] = useState<"inherit" | "disable" | "custom">("inherit");
+  const [negCacheCustomText, setNegCacheCustomText] = useState("60");
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(true);
   const [togglingOnline, setTogglingOnline] = useState(false);
@@ -427,6 +432,22 @@ function ConfigTab({
   const reposState = useAsync(() => listAllRepositories(), [], {
     cacheKey: "repositories:options",
   });
+  const proxiesState = useAsync(
+    () => (repo?.type === "proxy" ? listOutboundProxies() : Promise.resolve(null)),
+    [repo?.type],
+    { cacheKey: "repositories:outbound-proxies" },
+  );
+  const proxySelectOptions = useMemo(() => {
+    const base = [{ value: "0", label: t("repoDetail.configOutboundProxyDirect") }];
+    const items = proxiesState.data?.items ?? [];
+    for (const p of items) {
+      base.push({
+        value: String(p.id),
+        label: `${p.name} [${p.kind.toUpperCase()}]${p.enabled ? "" : ` (${t("outboundProxies.disabled")})`}`,
+      });
+    }
+    return base;
+  }, [proxiesState.data, t]);
   const memberOptions = (reposState.data?.items ?? [])
     .filter((r) => r.format === repo?.format && r.name !== repo?.name)
     .map((r) => r.name);
@@ -447,6 +468,17 @@ function ConfigTab({
       setCacheRetentionText(
         String(hasQuotaLimit(repo.cacheRetentionDays) ? repo.cacheRetentionDays : 0),
       );
+      setOutboundProxyId(repo.outboundProxyId ? String(repo.outboundProxyId) : "0");
+      if (repo.negativeCacheTtlSeconds === undefined) {
+        setNegCacheMode("inherit");
+        setNegCacheCustomText("60");
+      } else if (repo.negativeCacheTtlSeconds === 0) {
+        setNegCacheMode("disable");
+        setNegCacheCustomText("60");
+      } else {
+        setNegCacheMode("custom");
+        setNegCacheCustomText(String(repo.negativeCacheTtlSeconds));
+      }
       setOnline(repo.online ?? true);
       setConnStatus(repo.connectionStatus?.status ?? null);
     }
@@ -459,6 +491,11 @@ function ConfigTab({
   const quotaBytesValue = parseQuotaBytes(quotaBytesText, quotaBytesUnit);
   const quotaAssetsValue = parseNonNegativeInt(quotaAssetsText);
   const cacheRetentionValue = parseNonNegativeInt(cacheRetentionText);
+  const parsedNegCacheCustom = parseNonNegativeInt(negCacheCustomText);
+  const negCacheCustomInvalid =
+    repo?.type === "proxy" &&
+    negCacheMode === "custom" &&
+    (parsedNegCacheCustom === null || parsedNegCacheCustom < 1 || parsedNegCacheCustom > 3600);
   // 存储配额只有承载写入的 hosted 仓库可设——group 不承载写入，proxy 的缓存在读取回源
   // 路径上落盘、没有准入预检与流式早拒，后端对这两类仓库提交非 0 配额直接 400。
   // 因此配额两项按类型出现/隐藏，校验与提交也只对 hosted 生效（与「保留天数仅 proxy」同一范式）。
@@ -511,8 +548,18 @@ function ConfigTab({
       notifyError(t("repoDetail.configQuotaInvalid"));
       return;
     }
+    if (negCacheCustomInvalid) {
+      notifyError(t("repoDetail.configNegativeCacheInvalid"));
+      return;
+    }
     setSaving(true);
     const normalizedAliases = aliases.map((a) => a.trim()).filter(Boolean);
+    const negCacheTtlPatch =
+      negCacheMode === "inherit"
+        ? -1
+        : negCacheMode === "disable"
+          ? 0
+          : (parsedNegCacheCustom ?? 60);
     const patch: {
       visibility: RepoVisibility;
       description: string;
@@ -521,6 +568,8 @@ function ConfigTab({
       quotaBytes?: number;
       quotaAssets?: number;
       cacheRetentionDays?: number;
+      outboundProxyId?: number;
+      negativeCacheTtlSeconds?: number;
     } = {
       visibility,
       description,
@@ -531,9 +580,14 @@ function ConfigTab({
       ...(quotaEditable
         ? { quotaBytes: quotaBytesValue ?? 0, quotaAssets: quotaAssetsValue ?? 0 }
         : {}),
-      // 保留天数只对 proxy 有意义：其他类型提交非 0 值会被后端拒绝（400），
-      // 而非 proxy 也从不渲染该输入，故整字段按类型条件提交。
-      ...(repo?.type === "proxy" ? { cacheRetentionDays: cacheRetentionValue ?? 0 } : {}),
+      // 保留天数、出站代理与 404 负缓存覆盖只对 proxy 有意义。
+      ...(repo?.type === "proxy"
+        ? {
+            cacheRetentionDays: cacheRetentionValue ?? 0,
+            outboundProxyId: Number(outboundProxyId) || 0,
+            negativeCacheTtlSeconds: negCacheTtlPatch,
+          }
+        : {}),
     };
     updateRepository(repoName, patch)
       .then(() => {
@@ -815,8 +869,8 @@ function ConfigTab({
             </>
           ) : null}
 
-          {/* 代理缓存保留：只对 proxy 有意义（hosted/group 无「可重拉的缓存」语义，
-              后端对这些类型提交非 0 值会直接拒绝），因此整块按类型出现/隐藏。 */}
+          {/* 代理缓存保留 + 出站代理 + 404 负缓存策略：只对 proxy 有意义
+              （hosted/group 提交非零值会被后端拒绝），因此整块按类型出现/隐藏。 */}
           {repo.type === "proxy" ? (
             <>
               <TextInput
@@ -839,6 +893,39 @@ function ConfigTab({
                     : t("repoDetail.configCacheRetentionOff")}
                 </Text>
               )}
+
+              <Select
+                label={t("repoDetail.configOutboundProxy")}
+                description={t("repoDetail.configOutboundProxyHint")}
+                data={proxySelectOptions}
+                value={outboundProxyId}
+                onChange={(v) => setOutboundProxyId(v ?? "0")}
+                allowDeselect={false}
+                searchable
+              />
+
+              <Select
+                label={t("repoDetail.configNegativeCacheTtl")}
+                description={t("repoDetail.configNegativeCacheTtlHint")}
+                data={[
+                  { value: "inherit", label: t("repoDetail.configNegativeCacheInherit") },
+                  { value: "disable", label: t("repoDetail.configNegativeCacheDisable") },
+                  { value: "custom", label: t("repoDetail.configNegativeCacheCustom") },
+                ]}
+                value={negCacheMode}
+                onChange={(v) => v && setNegCacheMode(v as "inherit" | "disable" | "custom")}
+                allowDeselect={false}
+              />
+              {negCacheMode === "custom" ? (
+                <TextInput
+                  label={t("repoDetail.configNegativeCacheCustomLabel")}
+                  value={negCacheCustomText}
+                  error={
+                    negCacheCustomInvalid ? t("repoDetail.configNegativeCacheInvalid") : undefined
+                  }
+                  onChange={(e) => setNegCacheCustomText(e.currentTarget.value)}
+                />
+              ) : null}
             </>
           ) : null}
         </Stack>

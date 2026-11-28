@@ -1333,6 +1333,18 @@ export const en = {
       "Expired proxy cache entries are cleaned up based on their last write time: entries that stay read-only long enough are removed and fetched from the upstream again on the next request. Set 0 or leave empty to disable automatic cleanup.",
     configCacheRetentionValue: "= keep for {{days}} days",
     configCacheRetentionOff: "Disabled (0 days = no automatic cleanup)",
+    configOutboundProxy: "Outbound Proxy",
+    configOutboundProxyHint:
+      "Applies only to this proxy repository; when attached, all upstream fetches and probes route through it (HTTP / SOCKS5 / Mihomo)",
+    configOutboundProxyDirect: "Direct (no proxy)",
+    configNegativeCacheTtl: "404 Negative Cache Policy",
+    configNegativeCacheTtlHint:
+      "Prevents transient upstream 404 lock-in (e.g. libraries.minecraft.net); Maven primary JARs with a cached sibling POM are automatically protected",
+    configNegativeCacheInherit: "Inherit global setting",
+    configNegativeCacheDisable: "Disabled (0s, always check upstream)",
+    configNegativeCacheCustom: "Custom TTL (seconds)",
+    configNegativeCacheCustomLabel: "Custom 404 negative cache TTL (1–3600 seconds)",
+    configNegativeCacheInvalid: "Enter an integer between 1 and 3600 seconds",
     configCacheRetentionInvalid:
       "Enter a whole number of days greater than or equal to 0 (0 or empty disables it)",
   },
@@ -2395,5 +2407,56 @@ export const en = {
     allowPrivateSource: "Source is on this host / internal network (allow private network fetch)",
     allowPrivateSourceHint:
       "Only enable if you trust this source. Required when migrating from a host that resolves to a loopback or private address (e.g. a same-machine Nexus).",
+  },
+  outboundProxies: {
+    title: "Outbound Proxy Pool (Mihomo Supported)",
+    description:
+      "Manage named outbound proxies that can be attached per proxy repository. Supports HTTP/HTTPS, SOCKS5/SOCKS5H, and managed Mihomo nodes (VLESS/VMess/Trojan/SS/Hysteria2/TUIC/AnyTLS). Credentials and node configs are sealed with AES-256-GCM at rest.",
+    add: "Add Proxy",
+    empty:
+      "No outbound proxies configured yet. Add one here, then attach it to any proxy repository.",
+    loadFailed: "Failed to load outbound proxies",
+    mihomoAvailable: "Mihomo runtime ready: {{version}}",
+    mihomoUnavailable: "Mihomo binary not detected",
+    mihomoInstallHint:
+      "HTTP and SOCKS5 proxies work out of the box (including an external Mihomo mixed-port). To use managed Mihomo node protocols, install the mihomo binary on PATH or place it in data/bin/mihomo.",
+    colName: "Name",
+    colKind: "Protocol",
+    colPreview: "Endpoint Preview (Redacted)",
+    colStatus: "Status",
+    colRepos: "Bound Repositories",
+    colActions: "Actions",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    test: "Test Connectivity",
+    createTitle: "Add Outbound Proxy",
+    editTitle: "Edit Outbound Proxy",
+    fieldName: "Proxy Name",
+    fieldKind: "Protocol Kind",
+    fieldConfig: "Proxy URL / Mihomo Node Config",
+    fieldConfigStandardHint:
+      "Enter a full proxy URL (e.g. http://127.0.0.1:7890 or socks5h://user:pass@127.0.0.1:7891). Credentials are encrypted at rest.",
+    fieldConfigMihomoHint:
+      "Paste a share URI (vless:// / vmess:// / trojan:// / ss:// / hysteria2:// / hy2:// / tuic:// / anytls://) or a Clash/Mihomo YAML proxy node snippet.",
+    fieldConfigEditHint:
+      "Current sealed preview: {{preview}}. Leave blank to keep the existing secret unless changing protocol kind.",
+    fieldDescription: "Description (optional)",
+    fieldDescriptionPlaceholder:
+      "e.g. Outbound tunnel for libraries.minecraft.net and overseas Maven repos",
+    fieldEnabled: "Enable this outbound proxy",
+    nameRequired: "Proxy name is required",
+    configRequired: "Proxy URL or Mihomo node config is required",
+    configRequiredOnKindChange: "Provide a new config when changing the proxy protocol kind",
+    created: "Outbound proxy created",
+    updated: "Outbound proxy updated",
+    deleted: "Outbound proxy deleted",
+    deleteTitle: "Delete Outbound Proxy",
+    deleteConfirm:
+      'Delete outbound proxy "{{name}}"? Detach it from any bound proxy repositories first.',
+    testTitle: "Test Connectivity: {{name}}",
+    testTargetUrl: "Target URL (public http/https URL)",
+    runTest: "Run Test",
+    testSuccess: "Reachable ({{latency}} ms)",
+    testFailed: "Connection failed",
   },
 } satisfies Resources;

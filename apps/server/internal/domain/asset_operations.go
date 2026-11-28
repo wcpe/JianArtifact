@@ -170,14 +170,19 @@ func (s *AssetService) ApplyOperation(repoName string, op AssetOperation) (*Asse
 		return &AssetOperationResult{OperationID: id}, err
 	}
 	s.releaseItemBlobs(items)
+	// 批量操作的级联失效必须与单条写入对齐：删除/移动/重命名后若不失效父 group，
+	// 恢复或重新上传的同路径制品会被 group 级旧 404 继续遮蔽（与本轮修的毒缓存同一缺陷类）。
+	// 这里收集全部受影响路径后一次算父 group 集合，避免按条目数放大成 N 次仓库表遍历。
+	affected := make([]string, 0, len(items)*2)
 	for _, item := range items {
 		if item.Before != nil {
-			s.negCache.remove(repo.ID, item.Before.Path)
+			affected = append(affected, item.Before.Path)
 		}
 		if item.After != nil {
-			s.negCache.remove(repo.ID, item.After.Path)
+			affected = append(affected, item.After.Path)
 		}
 	}
+	s.invalidatePathsWithGroups(repo.ID, affected)
 	paths := make([]string, 0, len(items))
 	for _, item := range items {
 		paths = append(paths, item.Path)

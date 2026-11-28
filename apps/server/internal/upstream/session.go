@@ -13,17 +13,23 @@ import (
 // ErrRequestFailed 表示受控会话的上游请求失败，避免把目标地址或凭据暴露给调用方。
 var ErrRequestFailed = errors.New("upstream: 上游请求失败")
 
-// Session 把一次上游读取绑定到配置的 origin 与可选凭据引用。
+// Session 把一次上游读取绑定到配置的 origin 与可选凭据引用、可选出站代理 ID。
 // 凭据只会发送到该 origin，绝对地址读取可安全复用既有的出站校验和重定向策略。
 type Session struct {
-	client        *Client
-	origin        *url.URL
-	credentialRef string
+	client          *Client
+	origin          *url.URL
+	credentialRef   string
+	outboundProxyID int64
 }
 
 // NewSession 创建受控上游读取会话。configuredURL 必须是无用户信息的绝对 HTTP 地址；
 // 配置的查询参数和片段不属于 origin，因而不接受。
 func (c *Client) NewSession(configuredURL, credentialRef string) (*Session, error) {
+	return c.NewSessionWithProxy(configuredURL, credentialRef, 0)
+}
+
+// NewSessionWithProxy 创建绑定可选出站代理的受控上游读取会话；proxyID<=0 表示直连。
+func (c *Client) NewSessionWithProxy(configuredURL, credentialRef string, proxyID int64) (*Session, error) {
 	origin, err := parseSessionOrigin(configuredURL)
 	if err != nil {
 		return nil, ErrUnsafeURL
@@ -33,7 +39,7 @@ func (c *Client) NewSession(configuredURL, credentialRef string) (*Session, erro
 			return nil, err
 		}
 	}
-	return &Session{client: c, origin: origin, credentialRef: credentialRef}, nil
+	return &Session{client: c, origin: origin, credentialRef: credentialRef, outboundProxyID: proxyID}, nil
 }
 
 // ReadPath 读取配置地址下的相对路径。凭据仅会发往配置 origin。
@@ -121,6 +127,9 @@ func (s *Session) read(ctx context.Context, target *url.URL, accept string) (io.
 }
 
 func (s *Session) request(ctx context.Context, target *url.URL, bearer string, allowStaticCredential bool, accept string) (*http.Response, error) {
+	if s.outboundProxyID > 0 {
+		ctx = WithOutboundProxyID(ctx, s.outboundProxyID)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return nil, ErrUnsafeURL

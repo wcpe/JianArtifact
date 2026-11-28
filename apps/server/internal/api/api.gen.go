@@ -1220,6 +1220,27 @@ func (e OperationsAlertSeverity) Valid() bool {
 	}
 }
 
+// Defines values for OutboundProxyKind.
+const (
+	Http   OutboundProxyKind = "http"
+	Mihomo OutboundProxyKind = "mihomo"
+	Socks5 OutboundProxyKind = "socks5"
+)
+
+// Valid indicates whether the value is a known member of the OutboundProxyKind enum.
+func (e OutboundProxyKind) Valid() bool {
+	switch e {
+	case Http:
+		return true
+	case Mihomo:
+		return true
+	case Socks5:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PrivateAdmissionCandidateStatusCoverage.
 const (
 	PrivateAdmissionCandidateStatusCoverageUnknown PrivateAdmissionCandidateStatusCoverage = "unknown"
@@ -3690,6 +3711,21 @@ type CreateMigrationRequest struct {
 	SourceType   MigrationSourceType    `json:"sourceType"`
 }
 
+// CreateOutboundProxyRequest defines model for CreateOutboundProxyRequest.
+type CreateOutboundProxyRequest struct {
+	// Config 代理配置内容（服务端加密落库、绝不回显）：
+	// - http：http://[user:pass@]host:port 或 https://...
+	// - socks5：socks5://[user:pass@]host:port 或 socks5h://...
+	// - mihomo：单节点分享链接（vless/vmess/trojan/ss/hysteria2/hy2/tuic/anytls）或 Clash/Mihomo YAML 节点片段
+	Config      string  `json:"config"`
+	Description *string `json:"description,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+
+	// Kind 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
+	Kind OutboundProxyKind `json:"kind"`
+	Name string            `json:"name"`
+}
+
 // CreateRepositoryRequest defines model for CreateRepositoryRequest.
 type CreateRepositoryRequest struct {
 	// Aliases 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）
@@ -3712,6 +3748,12 @@ type CreateRepositoryRequest struct {
 	// Members group 仓库的成员仓库名（有序，type=group 时必填）
 	Members *[]string `json:"members,omitempty"`
 	Name    string    `json:"name"`
+
+	// NegativeCacheTtlSeconds 可选：proxy 仓库级 404 负缓存 TTL 覆盖（秒）；缺省继承全局，0 关闭负缓存
+	NegativeCacheTtlSeconds *int `json:"negativeCacheTtlSeconds,omitempty"`
+
+	// OutboundProxyId 可选：为 proxy 仓库挂载的全局出站代理 ID（0 或缺省表示直连）
+	OutboundProxyId *int64 `json:"outboundProxyId,omitempty"`
 
 	// QuotaAssets 仓库制品数配额上限；0 或缺省表示不限。
 	// 计量口径是**制品计数** `COUNT(*)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
@@ -4583,6 +4625,41 @@ type OperationsDashboardKpi struct {
 	RequestCount    int64    `json:"requestCount"`
 }
 
+// OutboundProxy defines model for OutboundProxy.
+type OutboundProxy struct {
+	// BoundRepositories 当前挂载该出站代理的 proxy 仓库主名列表
+	BoundRepositories []string `json:"boundRepositories"`
+	CreatedAt         string   `json:"createdAt"`
+	Description       string   `json:"description"`
+	Enabled           bool     `json:"enabled"`
+
+	// EndpointPreview 脱敏后的代理端点预览（不含密码、UUID、公钥或令牌）
+	EndpointPreview string `json:"endpointPreview"`
+	Id              int64  `json:"id"`
+
+	// Kind 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
+	Kind      OutboundProxyKind `json:"kind"`
+	Name      string            `json:"name"`
+	UpdatedAt string            `json:"updatedAt"`
+}
+
+// OutboundProxyKind 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
+type OutboundProxyKind string
+
+// OutboundProxyList defines model for OutboundProxyList.
+type OutboundProxyList struct {
+	Items []OutboundProxy `json:"items"`
+
+	// MihomoAvailable 宿主机是否已检测到可用的 mihomo / clash-meta 可执行文件
+	MihomoAvailable bool `json:"mihomoAvailable"`
+
+	// MihomoBinary 检测到的 mihomo 二进制路径（不可用时省略）
+	MihomoBinary *string `json:"mihomoBinary,omitempty"`
+
+	// MihomoVersion 检测到的 mihomo 版本信息（不可用时省略）
+	MihomoVersion *string `json:"mihomoVersion,omitempty"`
+}
+
 // PasswordChangeRequest defines model for PasswordChangeRequest.
 type PasswordChangeRequest struct {
 	Password string `json:"password"`
@@ -4854,8 +4931,17 @@ type Repository struct {
 	Members *[]string `json:"members,omitempty"`
 	Name    string    `json:"name"`
 
+	// NegativeCacheTtlSeconds proxy 仓库级 404 负缓存 TTL 覆盖（秒）；缺省表示继承全局配置，0 表示对该仓库关闭负缓存
+	NegativeCacheTtlSeconds *int `json:"negativeCacheTtlSeconds,omitempty"`
+
 	// Online 仓库是否在线（管理员可手动置离线；offline 不参与复制）
 	Online *bool `json:"online,omitempty"`
+
+	// OutboundProxyId 挂载的全局出站代理 ID（仅 type=proxy；0 或缺省表示直连）
+	OutboundProxyId *int64 `json:"outboundProxyId,omitempty"`
+
+	// OutboundProxyName 挂载的全局出站代理名称（只读展示字段，仅管理员可见）
+	OutboundProxyName *string `json:"outboundProxyName,omitempty"`
 
 	// QuotaAssets 仓库制品数配额上限；0 或缺省表示不限。
 	// 计量口径是**制品计数** `COUNT(*)`（与 artifactCount 同一口径）；
@@ -5289,6 +5375,22 @@ type StatusInfo struct {
 	Version     string `json:"version"`
 }
 
+// TestOutboundProxyRequest defines model for TestOutboundProxyRequest.
+type TestOutboundProxyRequest struct {
+	// TargetUrl 可选：测试目标公网 http/https URL（默认 https://libraries.minecraft.net/）
+	TargetUrl *string `json:"targetUrl,omitempty"`
+}
+
+// TestOutboundProxyResult defines model for TestOutboundProxyResult.
+type TestOutboundProxyResult struct {
+	LatencyMs int64  `json:"latencyMs"`
+	Message   string `json:"message"`
+	Ok        bool   `json:"ok"`
+
+	// StatusCode 目标上游返回的 HTTP 状态码（建连失败时省略）
+	StatusCode *int `json:"statusCode,omitempty"`
+}
+
 // Token defines model for Token.
 type Token struct {
 	CreatedAt string  `json:"createdAt"`
@@ -5362,6 +5464,18 @@ type UnmanagedBackupList struct {
 	Total int               `json:"total"`
 }
 
+// UpdateOutboundProxyRequest defines model for UpdateOutboundProxyRequest.
+type UpdateOutboundProxyRequest struct {
+	// Config 可选：新的代理配置；留空且未切换 kind 时沿用已保存的加密配置
+	Config      *string `json:"config,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+
+	// Kind 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
+	Kind *OutboundProxyKind `json:"kind,omitempty"`
+	Name *string            `json:"name,omitempty"`
+}
+
 // UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
 type UpdateRepositoryRequest struct {
 	// Aliases 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一）
@@ -5381,6 +5495,12 @@ type UpdateRepositoryRequest struct {
 
 	// Members 更新 group 成员仓库名（仅 type=group）
 	Members *[]string `json:"members,omitempty"`
+
+	// NegativeCacheTtlSeconds 更新 proxy 仓库级 404 负缓存 TTL（秒）：传 -1 恢复继承全局，传 0 关闭负缓存，传 1..3600 设自定义秒数；缺省表示不修改
+	NegativeCacheTtlSeconds *int `json:"negativeCacheTtlSeconds,omitempty"`
+
+	// OutboundProxyId 更新 proxy 仓库挂载的全局出站代理 ID（传 0 表示解除挂载改为直连；缺省表示不修改）
+	OutboundProxyId *int64 `json:"outboundProxyId,omitempty"`
 
 	// QuotaAssets 更新仓库制品数配额上限：传 0 表示改为不限；缺省表示不修改。
 	// 计量口径是**制品计数** `COUNT(*)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
@@ -5734,6 +5854,9 @@ type ObservabilityFromParam = time.Time
 
 // ObservabilityToParam defines model for ObservabilityToParam.
 type ObservabilityToParam = time.Time
+
+// OutboundProxyIdParam defines model for OutboundProxyIdParam.
+type OutboundProxyIdParam = int64
 
 // PageParam defines model for PageParam.
 type PageParam = int
@@ -6475,6 +6598,15 @@ type StartMigrationJSONRequestBody = StartMigrationRequest
 // AcknowledgeAuditAttentionJSONRequestBody defines body for AcknowledgeAuditAttention for application/json ContentType.
 type AcknowledgeAuditAttentionJSONRequestBody = AcknowledgeAuditAttentionRequest
 
+// CreateOutboundProxyJSONRequestBody defines body for CreateOutboundProxy for application/json ContentType.
+type CreateOutboundProxyJSONRequestBody = CreateOutboundProxyRequest
+
+// UpdateOutboundProxyJSONRequestBody defines body for UpdateOutboundProxy for application/json ContentType.
+type UpdateOutboundProxyJSONRequestBody = UpdateOutboundProxyRequest
+
+// TestOutboundProxyJSONRequestBody defines body for TestOutboundProxy for application/json ContentType.
+type TestOutboundProxyJSONRequestBody = TestOutboundProxyRequest
+
 // CreateRepositoryJSONRequestBody defines body for CreateRepository for application/json ContentType.
 type CreateRepositoryJSONRequestBody = CreateRepositoryRequest
 
@@ -7093,6 +7225,21 @@ type ServerInterface interface {
 	// GetHostMonitoring 当前主机监控（仅管理员）
 	// (GET /api/v1/observability/host)
 	GetHostMonitoring(c *gin.Context, params GetHostMonitoringParams)
+	// ListOutboundProxies 查询全局出站代理池与 Mihomo 运行时能力（仅管理员）
+	// (GET /api/v1/outbound-proxies)
+	ListOutboundProxies(c *gin.Context)
+	// CreateOutboundProxy 新增全局出站代理（仅管理员）
+	// (POST /api/v1/outbound-proxies)
+	CreateOutboundProxy(c *gin.Context)
+	// DeleteOutboundProxy 删除全局出站代理（仅管理员；若仍有仓库引用则返回 409）
+	// (DELETE /api/v1/outbound-proxies/{id})
+	DeleteOutboundProxy(c *gin.Context, id OutboundProxyIdParam)
+	// UpdateOutboundProxy 更新全局出站代理（仅管理员）
+	// (PUT /api/v1/outbound-proxies/{id})
+	UpdateOutboundProxy(c *gin.Context, id OutboundProxyIdParam)
+	// TestOutboundProxy 测试出站代理到目标公网地址的连通性（仅管理员）
+	// (POST /api/v1/outbound-proxies/{id}/test)
+	TestOutboundProxy(c *gin.Context, id OutboundProxyIdParam)
 	// ListPublicRepositories 公开仓库列表（无需认证，含全局置顶名）
 	// (GET /api/v1/public/repositories)
 	ListPublicRepositories(c *gin.Context)
@@ -9681,6 +9828,107 @@ func (siw *ServerInterfaceWrapper) GetHostMonitoring(c *gin.Context) {
 	siw.Handler.GetHostMonitoring(c, params)
 }
 
+// ListOutboundProxies operation middleware
+func (siw *ServerInterfaceWrapper) ListOutboundProxies(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListOutboundProxies(c)
+}
+
+// CreateOutboundProxy operation middleware
+func (siw *ServerInterfaceWrapper) CreateOutboundProxy(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateOutboundProxy(c)
+}
+
+// DeleteOutboundProxy operation middleware
+func (siw *ServerInterfaceWrapper) DeleteOutboundProxy(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id OutboundProxyIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteOutboundProxy(c, id)
+}
+
+// UpdateOutboundProxy operation middleware
+func (siw *ServerInterfaceWrapper) UpdateOutboundProxy(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id OutboundProxyIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateOutboundProxy(c, id)
+}
+
+// TestOutboundProxy operation middleware
+func (siw *ServerInterfaceWrapper) TestOutboundProxy(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id OutboundProxyIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.TestOutboundProxy(c, id)
+}
+
 // ListPublicRepositories operation middleware
 func (siw *ServerInterfaceWrapper) ListPublicRepositories(c *gin.Context) {
 
@@ -11665,4 +11913,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/backups/uploads/:id", wrapper.GetBackupUpload)
 	router.POST(options.BaseURL+"/api/v1/backups/uploads/:id/complete", wrapper.CompleteBackupUpload)
 	router.POST(options.BaseURL+"/api/v1/backups/uploads/:id/abort", wrapper.AbortBackupUpload)
+	router.GET(options.BaseURL+"/api/v1/outbound-proxies", wrapper.ListOutboundProxies)
+	router.POST(options.BaseURL+"/api/v1/outbound-proxies", wrapper.CreateOutboundProxy)
+	router.DELETE(options.BaseURL+"/api/v1/outbound-proxies/:id", wrapper.DeleteOutboundProxy)
+	router.PUT(options.BaseURL+"/api/v1/outbound-proxies/:id", wrapper.UpdateOutboundProxy)
+	router.POST(options.BaseURL+"/api/v1/outbound-proxies/:id/test", wrapper.TestOutboundProxy)
 }

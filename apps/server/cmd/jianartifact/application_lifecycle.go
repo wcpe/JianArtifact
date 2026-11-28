@@ -33,6 +33,12 @@ func (s *appServices) shutdownApplicationWithin(grace time.Duration, stopAudit, 
 	if auditErr != nil {
 		auditErr = fmt.Errorf("关停安全审计：%w", auditErr)
 	}
+	// 受管 Mihomo 子进程必须在这里回收，不能只依赖调用方的 defer：
+	// 一键重启走 syscall.Exec 替换进程映像，成功后所有 defer 都不会执行，
+	// 放在 defer 里会让每次重启都留下上一代 mihomo 进程与含明文凭据的工作目录。
+	if s.outboundProxySvc != nil {
+		s.outboundProxySvc.Close()
+	}
 	return errors.Join(ingressErr, auditErr, s.db.Close())
 }
 

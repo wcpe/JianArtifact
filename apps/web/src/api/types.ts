@@ -208,3 +208,12 @@ export type UpstreamHealthSummary = Schemas["UpstreamHealthSummary"];
 export type UpstreamHealthSeries = Schemas["UpstreamHealthSeries"];
 /** 最近采样明细（分钟桶摘要，非逐请求日志）。 */
 export type UpstreamHealthRecent = Schemas["UpstreamHealthRecent"];
+
+// —— 全局出站代理池与 Mihomo 协议 ——
+export type OutboundProxyKind = Schemas["OutboundProxyKind"];
+export type OutboundProxy = Schemas["OutboundProxy"];
+export type OutboundProxyList = Schemas["OutboundProxyList"];
+export type CreateOutboundProxyRequest = Schemas["CreateOutboundProxyRequest"];
+export type UpdateOutboundProxyRequest = Schemas["UpdateOutboundProxyRequest"];
+export type TestOutboundProxyRequest = Schemas["TestOutboundProxyRequest"];
+export type TestOutboundProxyResult = Schemas["TestOutboundProxyResult"];

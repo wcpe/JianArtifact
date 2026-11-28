@@ -129,7 +129,14 @@ func (s *AssetService) restoreAssetEntry(entry repository.AssetTrashEntry, asset
 		return repository.MarkAssetTrashResolved(tx, entry.ID, repository.AssetTrashRestored)
 	}
 	_, err := s.mutator.ApplyWithOperationIDAndHook(newOperationID(), []repository.AssetMutationItem{item}, hook)
-	return err
+	if err != nil {
+		return err
+	}
+	// 恢复等同一次写入：必须同步失效该路径及所有父 group 的 404 负缓存，
+	// 否则「刚恢复的制品仍然 404」，而运维会以为恢复失败又去重试。
+	// 走与 Put/Delete 相同的级联通道，保持写路径口径一致。
+	s.invalidatePathWithGroups(asset.RepositoryID, asset.Path)
+	return nil
 }
 
 // PurgeAssetTrash 彻底清理指定回收站条目：释放 blob 并把条目标为 purged。

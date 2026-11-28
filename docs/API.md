@@ -173,6 +173,30 @@
 - `GET /api/v1/observability/host?from=&to=&interface=`：当前节点主机监控（CPU / 内存 / 磁盘 / 网络 / 进程）。`interface` 为可选网卡名（取自响应 `networkInterfaces[].name`），省略时按全部非回环网卡聚合，指定时速率图与累计总量都按该网卡；趋势点 `HostMetricPoint` 另暴露 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`（自网卡启动以来的累计字节，可空），响应含 `networkInterfaces: HostNetworkInterface[]`（各网卡名与该网卡累计总量，无数据时省略）。字段以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - `GET /api/v1/licenses`：管理员读取内嵌依赖协议清单。
 
+### 全局出站代理池（FR-42）
+
+用于让**指定 proxy 仓库**的回源流量经由某个正向代理出口（企业 HTTP 代理、或本机 Mihomo/Clash 的 mixed-port）。
+全部端点**仅管理员**；列表与详情只返回脱敏 `endpointPreview`，**从不回显**节点凭据或密码。
+
+- `GET /api/v1/outbound-proxies`：列出代理池，并附带本机 Mihomo 运行时能力（`available` / `binaryPath` / `version`）。
+  `available` 为 false 既包含「找不到可执行文件」，也包含「找到了但跑不起来」（架构不符、缺动态库）。
+- `GET /api/v1/outbound-proxies/{id}` / `POST` / `PUT` / `DELETE`：CRUD。
+  - 支持的 `kind`：`http`（含 https CONNECT）、`socks5`、`socks5h`、`mihomo`。
+    **`socks5` 与 `socks5h` 在本实现中等价**，两者都把域名交给代理解析（不存在「本地解析的 socks5」变体）。
+  - `mihomo` 类型接受分享链接（`vless://` `vmess://` `trojan://` `ss://` `hysteria2://` `hy2://` `tuic://` `anytls://`）
+    或 Clash/Mihomo 节点 YAML。**节点配置按字段白名单透传**：未知键（如 `dialer-proxy`、`interface-name`、
+    `routing-mark`）会被丢弃而不是报错，避免分享链接夹带的客户端专属字段扩展出与产品语义无关的网络能力。
+  - 凭据与节点配置以 AES-256-GCM 密文落库，主密钥来自 `JIAN_OUTBOUND_PROXY_KEY` 或数据目录下的
+    `outbound-proxy.key`（0600，首次自动生成）。**该密钥不在备份包内**，见 [`OPERATIONS.md`](OPERATIONS.md)。
+  - **仍被仓库引用的代理不可删除**（返回 `409`），先解绑再删。
+- `POST /api/v1/outbound-proxies/{id}/test`：测试该代理到目标公网地址的连通性。
+  目标经与回源相同的 SSRF 策略校验；失败响应只给**按类别归一的固定文案**，
+  不回传底层错误文本（其中可能含子进程 stderr 的配置片段）。
+
+仓库侧新增两个 proxy 专属配置项：`outboundProxyId`（绑定代理池中的某个代理）与 `negativeCacheTtlSeconds`
+（`0` = 关闭负缓存每次实时回源，`1–3600` = 自定义秒数，缺省 = 继承全局）。
+绑定校验只要求代理**存在**；绑定一个已停用的代理在配置阶段合法，但运行时该仓库的回源会失败，UI 需据此提示。
+
 ### 节点备份与搬迁（FR-132 起；FR-40 增来源与演练）
 
 备份包是搬迁的传输单位：生成包 → 传包 → 导入包 → 校验，不涉及节点角色、水位或拓扑。包内只含 SQLite 一致性快照与内容寻址 blob，**不含任何密钥或节点本地配置**。
@@ -222,7 +246,7 @@
 proxy/group 读路径对「确认不存在」的路径做短窗负缓存（默认 TTL 60s，见 `JIAN_NEGATIVE_CACHE_TTL`）。这两个接口用于回答「某个路径现在是不是被钉成 404 了」并在必要时提前放它回源。**仅管理员**；**本批只交付 API，没有配套管理页面**（日志已能回答「为什么 404」的日常问题，为此再建一个有界缓冲与一套 UI 不划算，见 [`specs/0.13.0-proxy-resolve-observability.md`](specs/0.13.0-proxy-resolve-observability.md) §3.3）。
 
 - `GET /api/v1/maintenance/negative-cache`：返回进程内负缓存的有效条目快照（`NegativeCacheSummary`：`total` 为**过滤前**的有效条目总数，`entries` 按写入时间升序、最多 `limit` 条，每项含仓库、路径、写入时间与剩余 TTL）。支持 `repo` / `path_prefix` / `limit`（默认 100、上限 500）过滤。路径按**原样**返回（控制字符已转义）——管理员本就能通过仓库制品列表看到全量路径，此处不构成新增暴露面，而脱敏后的路径对排障没有价值。**只读，不清理、不改状态、不写审计**。
-- `DELETE /api/v1/maintenance/negative-cache`：语义按参数递进——**无参数 = 全清；仅 `repo` = 按仓库清；`repo` + `path` = 精确清这一条**。只传 `path` 不传 `repo` 返回 **400**；未知仓库返回 **404**。清理写审计，登记清理的条数与范围。典型场景：上游已修好但同路径仍是 404（负缓存 TTL 内不再回源），清掉对应条目即可立即回源。
+- `DELETE /api/v1/maintenance/negative-cache`：语义按参数递进——**无参数 = 全清；仅 `repo` = 按仓库清；`repo` + `path` = 精确清这一条**。只传 `path` 不传 `repo` 返回 **400**；未知仓库返回 **404**。**按仓库清理会级联清掉所有直接与嵌套父 group 的同路径条目**（负缓存键是 `(仓库, 路径)`，group 与成员是两套独立的键；不级联就会出现「成员已恢复，聚合仓仍返回 404」）。因此响应里的 `removed` 是**含级联条目**的合计，可能大于该仓库自身的条目数。清理写审计，登记清理的条数与范围。典型场景：上游已修好但同路径仍是 404（负缓存 TTL 内不再回源），清掉对应条目即可立即回源。
 
 负缓存是**纯内存**的，重启即清空；条目数有上限（默认 10000，满时先清过期、仍满则淘汰最早写入的一条），因此不会随运行时长无界增长。相关指标见 [`OPERATIONS.md`](OPERATIONS.md) 的「代理解析结果指标」。两个接口均要求管理员（未登录 401 / 非管理员 403）；未接线时返回 503。
 
