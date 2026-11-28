@@ -1085,10 +1085,23 @@ func (s *AssetService) resolvePath(ctx context.Context, repoName, path string) (
 // resolve 是 Resolve 的内部递归实现，depth 用于遏制 group 成员环引用。
 // 入口先查 404 负缓存：此前「确认不存在」且 TTL 未过期的路径直接 404，
 // 不再回源/探测（覆盖 Resolve/groupGet/proxyGet 各层入口，见）。
+//
+// 除 depth 外还沿 ctx 携带本轮已访问的 group ID 链（见 withVisitedGroup）：depth 只是
+// 层数上限，分支因子大于 1 时单请求仍会按 2^depth 放大；成环时 visited 能把每个 group
+// 收敛到最多展开一次，代价从指数级降到 O(仓库数)。写入侧已拒绝成环配置
+// （validateGroupAcyclic），这里是历史脏数据的兜底。
 func (s *AssetService) resolve(ctx context.Context, repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
 	if depth > maxResolveDepth {
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
+	}
+	if repo.Type == "group" {
+		if visitedGroupHas(ctx, repo.ID) {
+			// 已在本轮访问链上出现过：成环，按「确认不存在」收口，避免无限展开。
+			recordResolveFailure(ctx, ResolveFailureConfirmed)
+			return nil, nil, ErrNotFound
+		}
+		ctx = withVisitedGroup(ctx, repo.ID)
 	}
 	if !shouldBypassNegativeCache(ctx) && s.negCache.hit(repo.ID, path) {
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
@@ -1133,14 +1146,68 @@ func (s *AssetService) localGet(repo *repository.Repository, path string) (*repo
 	return asset, rc, nil
 }
 
+// resolveVisitedKey 是「本轮解析已访问 group」链在 ctx 上的键类型。
+type resolveVisitedKey struct{}
+
+// withVisitedGroup 把当前 group 追加到本轮的访问链上。
+//
+// 用不可变链表 + 共享底层 map：每层只追加一个节点，兄弟分支之间互不可见
+// （不能共用一张可变 map，否则并行成员会把彼此标记成「已访问」而误判成环、
+// 把正常的多成员聚合读成 404）。链条深度受 maxResolveDepth 约束，开销可忽略。
+func withVisitedGroup(ctx context.Context, groupID int64) context.Context {
+	prev := []int64(nil)
+	if chain, ok := ctx.Value(resolveVisitedKey{}).([]int64); ok {
+		prev = chain
+	}
+	// 复制而非 append 到共享底层数组：并行成员共享同一 backing array 时，
+	// append 会互相覆盖对方的尾巴。
+	next := make([]int64, len(prev)+1)
+	copy(next, prev)
+	next[len(prev)] = groupID
+	return context.WithValue(ctx, resolveVisitedKey{}, next)
+}
+
+// visitedGroupHas 报告 groupID 是否已在本轮访问链上（成环判定）。
+func visitedGroupHas(ctx context.Context, groupID int64) bool {
+	chain, ok := ctx.Value(resolveVisitedKey{}).([]int64)
+	if !ok {
+		return false
+	}
+	for _, id := range chain {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
+}
+
 // localGetRecursive 递归读取仓库（含嵌套 group）的本地缓存：仅访问本地 SQLite 与 blob，不触发网络。
+// 除 depth 外另带 visited 集合：本函数在 404 记账路径上被调用（Maven 兄妹 POM 守护），
+// 成环配置下同样会指数展开，而它没有 goroutine 收敛兜底，必须自己防环。
 func (s *AssetService) localGetRecursive(repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
+	return s.localGetRecursiveVisited(repo, path, depth, nil)
+}
+
+func (s *AssetService) localGetRecursiveVisited(repo *repository.Repository, path string, depth int, visited map[int64]bool) (*repository.Asset, io.ReadCloser, error) {
 	if repo == nil || depth > maxResolveDepth {
 		return nil, nil, ErrNotFound
 	}
 	if repo.Type != "group" {
 		return s.localGet(repo, path)
 	}
+	if visited == nil {
+		visited = map[int64]bool{}
+	}
+	if visited[repo.ID] {
+		return nil, nil, ErrNotFound
+	}
+	// 只标记路径上的节点：同层兄弟 group 若不共享成员，各自展开是正确且必要的；
+	// 这里复制一份而非改写入参 map，避免兄弟分支污染。
+	next := make(map[int64]bool, len(visited)+1)
+	for id := range visited {
+		next[id] = true
+	}
+	next[repo.ID] = true
 	cfg, err := repo.DecodeConfig()
 	if err != nil {
 		return nil, nil, err
@@ -1150,7 +1217,7 @@ func (s *AssetService) localGetRecursive(repo *repository.Repository, path strin
 		if getErr != nil || member == nil || !member.Online {
 			continue
 		}
-		if asset, rc, localErr := s.localGetRecursive(member, path, depth+1); localErr == nil {
+		if asset, rc, localErr := s.localGetRecursiveVisited(member, path, depth+1, next); localErr == nil {
 			return asset, rc, nil
 		}
 	}

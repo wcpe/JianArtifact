@@ -173,10 +173,34 @@ func NewProxyTransport(kind, rawProxyURL string) (*http.Transport, error) {
 	}
 }
 
-// validateProxyTargetURL 校验经出站代理访问的上游目标地址：
-// 必须为无 userinfo 的 http/https 绝对地址，并拒绝 localhost/内网保留域名及内网字面 IP（防 SSRF）；
-// 不在宿主本地执行 DNS 解析，使 DNS 解析交由远端代理完成（规避本地 DNS 污染与 Fake-IP 拦截）。
-func (p outboundPolicy) validateProxyTargetURL(target *url.URL) error {
+// fakeIPCIDR 是 Clash / Mihomo 的 Fake-IP 地址段：该段的地址不是真实主机，
+// 只是本地代理内核分配的占位标记，真实解析发生在代理内部。
+const fakeIPCIDR = "198.18.0.0/15"
+
+// proxyTargetLookupTimeout 是经代理目标地址的本地解析预算。
+// 它只影响安全判定，不参与实际拨号（域名由代理解析），因此取值偏短：
+// 宁可放弃一次纵深校验，也不要让每次回源都等一次慢 DNS。
+const proxyTargetLookupTimeout = 3 * time.Second
+
+// validateProxyTargetURL 校验经出站代理访问的上游目标地址。
+//
+// 它必须与直连分支保持同等强度的 SSRF 防护：经代理并不代表目标可信——挂载出站代理后，
+// PyPI/NuGet simple index 的下载链接、Cargo config.json 的 dl 模板、OCI 的 realm 等
+// **来自上游响应体**的地址都会走这条分支，其可信级低于管理员直接输入的上游地址。
+//
+// 判定顺序（前三条不需 DNS，必然生效）：
+//  1. 必须是 http/https 的绝对地址，且不得内嵌 userinfo；
+//  2. localhost / .local / .internal 等内网保留域名一律拒绝；
+//  3. 字面 IP 走与直连分支相同的 isUnsafeIP 判定；
+//  4. 域名尝试本地解析做纵深校验：解析结果指向内网则拒绝，全部落在 Fake-IP 段则放行。
+//
+// 第 4 条的边界必须说清：本地解析失败、超时或该主机只有代理侧才可解析时**放行**。
+// 原因是经代理时真实解析发生在代理内核（socks5h 语义，以及 Fake-IP 下本地拿不到真实 IP），
+// 本地 DNS 与代理侧 DNS 可能完全是两套命名空间；若把「本地解析不到」当成不安全，
+// 会让所有 Fake-IP 与内网无外网 DNS 的部署直接不可用，而这类部署正是挂载出站代理的主要场景。
+// 因此这里定位是**纵深防御**：能判定的内网目标一定拦下，判不了的交给代理侧，
+// 残余风险（代理侧 split-horizon 把域名解析到内网）由代理自身配置与运维边界承担。
+func (p outboundPolicy) validateProxyTargetURL(ctx context.Context, target *url.URL) error {
 	if target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil {
 		return fmt.Errorf("%w: 协议、主机或用户信息非法", ErrUnsafeURL)
 	}
@@ -187,15 +211,60 @@ func (p outboundPolicy) validateProxyTargetURL(target *url.URL) error {
 	if host == "" {
 		return fmt.Errorf("%w: 主机名非法", ErrUnsafeURL)
 	}
+	// 内网保留域名先拒，省一次解析；它们无论如何都不该出现在上游响应里。
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return fmt.Errorf("%w: 目标地址被禁止", ErrUnsafeURL)
+	}
 	if ip := net.ParseIP(host); ip != nil {
 		if isUnsafeIP(ip) {
 			return fmt.Errorf("%w: 目标地址被禁止", ErrUnsafeURL)
 		}
 		return nil
 	}
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
-		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
-		return fmt.Errorf("%w: 目标地址被禁止", ErrUnsafeURL)
+	if err := p.checkProxyTargetResolvesPublic(ctx, host); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkProxyTargetResolvesPublic 对经代理的域名目标做一次尽力而为的本地解析：
+// 只有「解析成功且结果里出现内网地址」才判为不安全，解析失败/超时一律放行（见调用方说明）。
+func (p outboundPolicy) checkProxyTargetResolvesPublic(ctx context.Context, host string) error {
+	if p.lookupIPAddr == nil {
+		return nil
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, proxyTargetLookupTimeout)
+	defer cancel()
+	ips, err := p.lookupIPAddr(lookupCtx, host)
+	if err != nil || len(ips) == 0 {
+		// 本地解析不到：交由代理侧解析（socks5h / Fake-IP 的正常形态）。
+		return nil
+	}
+	resolved := make([]net.IP, 0, len(ips))
+	for _, addr := range ips {
+		if addr.IP != nil {
+			resolved = append(resolved, addr.IP)
+		}
+	}
+	if len(resolved) == 0 {
+		return nil
+	}
+	// 全部落在 Fake-IP 段：这是代理内核分配的占位地址，真实目标由代理按域名转发。
+	allFake := true
+	for _, ip := range resolved {
+		if !isInCIDR(ip, fakeIPCIDR) {
+			allFake = false
+			break
+		}
+	}
+	if allFake {
+		return nil
+	}
+	for _, ip := range resolved {
+		if isUnsafeIP(ip) {
+			return fmt.Errorf("%w: 目标地址被禁止", ErrUnsafeURL)
+		}
 	}
 	return nil
 }
@@ -204,5 +273,5 @@ func (p outboundPolicy) checkProxyRedirect(req *http.Request, via []*http.Reques
 	if len(via) > 0 && !sameOrigin(via[len(via)-1].URL, req.URL) {
 		req.Header.Del("Authorization")
 	}
-	return p.validateProxyTargetURL(req.URL)
+	return p.validateProxyTargetURL(req.Context(), req.URL)
 }

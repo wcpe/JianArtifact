@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,19 +131,42 @@ func (c *negativeCache) add(repoID int64, path string) {
 	c.addEntry(repoID, path, 0, false)
 }
 
-// addWithCustomTTL 按仓库级覆盖 TTL 记录一次「确认不存在」；ttl<=0 表示该仓库关闭负缓存，不写表。
+// globalTTL 返回当前的全局负缓存 TTL（含 0 = 关闭态）。
+// 单独暴露是为了避免调用方直接摸 c.mu 与 c.ttl（recordGroupNegativeCache 需要读它做口径比较）。
+func (c *negativeCache) globalTTL() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ttl
+}
+
+// addWithCustomTTL 按仓库级覆盖 TTL 记录一次「确认不存在」。
+// ttl<=0 表示该仓库关闭负缓存，不写表。
 func (c *negativeCache) addWithCustomTTL(repoID int64, path string, ttl time.Duration) {
 	c.addEntry(repoID, path, ttl, true)
 }
 
+// addEntry 写入一条负缓存。
+//
+// 目标是「不能关闭的东西永远关不掉」：全局 TTL=0 是运维的绝对关闭开关，
+// 仓库级正数覆盖不得把它重新打开，否则全局关停在单个仓库上静默失效，
+// 而运维看到的是「已经关了却还在返回缓存的 404」。反向（全局开启、仓库设 0）仍然有效。
 func (c *negativeCache) addEntry(repoID int64, path string, customTTL time.Duration, hasCustom bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// 全局关闭态优先级最高，直接不写（含仓库级显式覆盖）。
+	if c.ttl <= 0 {
+		return
+	}
 	effectiveTTL := c.ttl
 	if hasCustom {
-		effectiveTTL = customTTL
+		// 仓库级覆盖只允许更短或关闭，不允许超过全局上限，避免单仓把条目钉得比全局更久。
+		if customTTL <= 0 {
+			return
+		}
+		if customTTL < effectiveTTL {
+			effectiveTTL = customTTL
+		}
 	}
-	// 关闭态不写任何条目，避免 map 单调增长。
 	if effectiveTTL <= 0 {
 		return
 	}
@@ -329,6 +353,11 @@ func (s *AssetService) SetNegativeCacheMaxEntries(n int) { s.negCache.setMaxEntr
 // NegativeCacheEntriesCount 返回当前负缓存有效条目数（清理过期后统计）。
 func (s *AssetService) NegativeCacheEntriesCount() int { return s.negCache.count() }
 
+// ParentGroupIDs 返回所有直接或间接包含 repoID 的父 group 仓库 ID。
+// 导出的原因是级联失效的正确性依赖「别名成员也能建边」，
+// 需要在集成测试里直接断言这条边存在，而不是靠间接的端到端行为猜测。
+func (s *AssetService) ParentGroupIDs(repoID int64) []int64 { return s.parentGroupIDs(repoID) }
+
 // NegativeCacheSnapshot 返回负缓存快照（仅管理员端点使用）。
 func (s *AssetService) NegativeCacheSnapshot(f NegativeCacheFilter) (NegativeCacheSnapshot, error) {
 	snap := s.negCache.snapshot(f)
@@ -383,14 +412,57 @@ func (s *AssetService) InvalidateRepoNegativeCache(repoID int64) int {
 
 // invalidatePathWithGroups 在成员仓库写入/回源缓存/删除制品后，同步失效自身及所有父级 group
 // 上该路径的 404 负缓存，避免新上传或刚恢复的制品被 group 级负缓存继续遮蔽。
+//
+// 开销说明：parentGroupIDs 要读一遍仓库表并对每个 group 解析 config，属热路径上的固定成本，
+// 而它挂在**每次 proxy 冷回源成功**与**每批发布**上（一次 500 依赖的构建就是 500 次）。
+// 负缓存常态是空的（构建成功的那条路径根本不会被缓存），因此这里先做一次 O(1) 判空：
+// 没有负缓存条目时，父子边一条也用不上，直接退化为一次 map 删除。
+// 这让「没有毒缓存时零额外成本」与「有毒缓存时正确失效」同时成立。
 func (s *AssetService) invalidatePathWithGroups(repoID int64, path string) {
 	if s == nil || repoID <= 0 || path == "" {
 		return
 	}
 	s.negCache.remove(repoID, path)
+	if s.negCache.count() == 0 {
+		return
+	}
 	for _, gid := range s.parentGroupIDs(repoID) {
 		s.negCache.remove(gid, path)
 	}
+}
+
+// invalidatePathsWithGroups 批量失效多条路径：父 group 边只解析一次，避免按条目数放大成 N 次全表扫描
+// （批量资产操作的条目上限是 500，逐条调用会把一次删除变成 500 次仓库表遍历）。
+func (s *AssetService) invalidatePathsWithGroups(repoID int64, paths []string) {
+	if s == nil || repoID <= 0 || len(paths) == 0 {
+		return
+	}
+	for _, path := range paths {
+		if path != "" {
+			s.negCache.remove(repoID, path)
+		}
+	}
+	if s.negCache.count() == 0 {
+		return
+	}
+	groups := s.parentGroupIDs(repoID)
+	if len(groups) == 0 {
+		return
+	}
+	for _, gid := range groups {
+		for _, path := range paths {
+			if path != "" {
+				s.negCache.remove(gid, path)
+			}
+		}
+	}
+}
+
+// logNegativeCacheCascadeFailure 记录父 group 反查失败。
+// 级联失效是「修好之后还要立刻能读到」的关键一步，静默失败会让运维
+// 在「已重新上传/已恢复上游却仍然 404」上白耗时间，因此必须留下可检索的痕迹。
+func (s *AssetService) logNegativeCacheCascadeFailure(repoID int64, err error) {
+	log.Printf("负缓存级联失效未能解析父 group，相关 group 条目可能残留 repositoryID=%d：%v", repoID, err)
 }
 
 // parentGroupIDs 查找所有直接或间接包含 targetRepoID 的 group 仓库 ID（带环路保护）。
@@ -398,13 +470,41 @@ func (s *AssetService) parentGroupIDs(targetRepoID int64) []int64 {
 	if s == nil || s.repos == nil || targetRepoID <= 0 {
 		return nil
 	}
-	all, err := s.repos.List(1000, 0)
+	all, err := s.repos.ListAllForGroupGraph()
 	if err != nil || len(all) == 0 {
+		if err != nil {
+			// 级联失效依赖这张表；查询失败时静默跳过会让「清了缓存还是 404」无从排查。
+			s.logNegativeCacheCascadeFailure(targetRepoID, err)
+		}
 		return nil
 	}
+	// byName 必须同时收主名与别名：group 成员允许写别名（validateConfig 用 GetByName 解析），
+	// 只按主名建边会让用别名描述的成员静默丢掉父边——级联失效不触发，
+	// 症状与本轮要修的毒缓存完全一样，且没有任何日志。
+	//
+	// 注意 List() 不填充 Aliases（它只 SELECT repository 表），必须单独批量取一次；
+	// 用 ListAliasesByRepos 一次 IN 查询，避免逐仓 N+1。
 	byName := make(map[string]*repository.Repository, len(all))
+	ids := make([]int64, 0, len(all))
 	for i := range all {
 		byName[all[i].Name] = &all[i]
+		ids = append(ids, all[i].ID)
+	}
+	if aliases, aliasErr := s.repos.ListAliasesByRepos(ids); aliasErr == nil {
+		for i := range all {
+			for _, alias := range aliases[all[i].ID] {
+				if alias == "" {
+					continue
+				}
+				// 主名优先：别名与主名冲突时保持已登记的条目（主名解析优先，与 GetByName 一致）。
+				if _, exists := byName[alias]; !exists {
+					byName[alias] = &all[i]
+				}
+			}
+		}
+	} else {
+		// 别名查询失败不应让整条级联失效路径失效，但必须留痕：此时用别名描述的成员会丢边。
+		s.logNegativeCacheCascadeFailure(0, aliasErr)
 	}
 	// memberID -> direct parent group IDs
 	parents := make(map[int64][]int64)
@@ -481,9 +581,7 @@ func (s *AssetService) recordGroupNegativeCache(repo *repository.Repository, mem
 			return
 		}
 		// 若全局 TTL 更短（含 0 关闭），以更短者为准。
-		s.negCache.mu.Lock()
-		globalTTL := s.negCache.ttl
-		s.negCache.mu.Unlock()
+		globalTTL := s.negCache.globalTTL()
 		if globalTTL <= 0 {
 			return
 		}
@@ -500,6 +598,12 @@ func (s *AssetService) recordGroupNegativeCache(repo *repository.Repository, mem
 // 当 Maven 坐标的同目录 .pom 已缓存在本地（且 <packaging> 不是 pom）时，
 // 该坐标对应的主 .jar 或运行时分类 .jar（排除 -sources.jar / -javadoc.jar 等可选附件）
 // 遇到上游 404 大概率是瞬时 404 / 上游半发布 / 镜像毒缓存，绝不写入负缓存锁死构建。
+//
+// 查找范围必须超出本条仓库：客户端通常经 group 拉 POM，POM 会落在**最先服务它的那个成员**上。
+// 若只看本 proxy 的本地缓存，当 POM 恰好在兄弟成员时本条 proxy 判定「无 POM 证据」并照写负缓存，
+// 之后 group 读进入 phase 2 会在这个成员上被 negCache.hit 直接 404、根本不回源——
+// 守护只对「POM 正好缓存在本条 proxy」的成员生效，等于没守住。
+// 因此这里在自身未命中时再向所有父 group 找一次（父 group 的递归读会覆盖全部成员）。
 func (s *AssetService) shouldSkipMavenNegativeCache(repo *repository.Repository, artPath string) bool {
 	if repo == nil || repo.Format != "maven" {
 		return false
@@ -508,6 +612,25 @@ func (s *AssetService) shouldSkipMavenNegativeCache(repo *repository.Repository,
 	if !ok {
 		return false
 	}
+	if s.hasLocalMavenPom(repo, pomPath) {
+		return true
+	}
+	// 只在自身未命中时向上找：命中即返回，常态（POM 与 jar 同仓）不会多付一次反查。
+	for _, gid := range s.parentGroupIDs(repo.ID) {
+		parent, err := s.repos.GetByID(gid)
+		if err != nil || parent == nil {
+			continue
+		}
+		if s.hasLocalMavenPom(parent, pomPath) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLocalMavenPom 报告 pomPath 是否已缓存在 repo（含其嵌套 group 成员）上，
+// 且该 POM 声明的 packaging 意味着同坐标应有 jar。POM 无法解析时按「应有 jar」保守处理。
+func (s *AssetService) hasLocalMavenPom(repo *repository.Repository, pomPath string) bool {
 	_, rc, err := s.localGetRecursive(repo, pomPath, 0)
 	if err != nil {
 		return false
@@ -559,11 +682,29 @@ func mavenSiblingPomPath(artPath string) (string, bool) {
 	if artifactID == "" || version == "" || strings.HasSuffix(artifactID, ".gradle.plugin") {
 		return "", false
 	}
+	dir := strings.Join(parts[:len(parts)-1], "/")
+
+	// SNAPSHOT 走另一套命名：协议层已把 .../1.0-SNAPSHOT/foo-1.0-SNAPSHOT.jar
+	// 改写成带时间戳的 foo-1.0-20260317.215705-3.jar，此时 artifactID-version 拼出的
+	// "foo-1.0-SNAPSHOT" 与真实文件名对不上，若不单独处理整个守护对 SNAPSHOT 完全失效——
+	// 而「pom 已发布、jar 还没传完」正是 SNAPSHOT 最典型的瞬时 404 场景。
+	//
+	// SNAPSHOT 目录下的同坐标 POM 与 jar 共享同一个前缀（都带同一时间戳），
+	// 因此直接用文件名去 .jar 换 .pom 即可，无需也不该回退到字面 SNAPSHOT 名。
+	if strings.HasSuffix(strings.ToUpper(version), "-SNAPSHOT") {
+		base, ok := strings.CutSuffix(filename, ".jar")
+		if !ok || base == "" {
+			return "", false
+		}
+		// 可选附件（-sources/-javadoc 等）的时间戳形态形如 foo-1.0-20260317.215705-3-sources.jar，
+		// 已在上面按后缀排除；这里剩余的均视为主构件或运行时 classifier。
+		return dir + "/" + base + ".pom", true
+	}
+
 	prefix := artifactID + "-" + version
 	// 匹配主 jar（<artifact>-<version>.jar）以及带运行时分类器的 jar（如 v12004-12004-mapped.jar / -universal.jar）。
 	if filename != prefix+".jar" && !strings.HasPrefix(filename, prefix+"-") {
 		return "", false
 	}
-	dir := strings.Join(parts[:len(parts)-1], "/")
 	return dir + "/" + prefix + ".pom", true
 }

@@ -1249,10 +1249,12 @@ export const zh = {
     configCacheRetentionValue: "= 保留 {{days}} 天",
     configCacheRetentionOff: "已关闭（0 天 = 不自动清理）",
     configOutboundProxy: "出站代理",
-    configOutboundProxyHint: "仅对该 proxy 仓库生效；直连不经代理，挂载后回源与探测统一经该出站代理转发（支持 HTTP/SOCKS5/Mihomo）",
+    configOutboundProxyHint:
+      "仅对该 proxy 仓库生效；直连不经代理，挂载后回源与探测统一经该出站代理转发（支持 HTTP/SOCKS5/Mihomo）",
     configOutboundProxyDirect: "直连（不使用代理）",
     configNegativeCacheTtl: "404 负缓存策略",
-    configNegativeCacheTtlHint: "防止上游瞬时 404 锁死构件（如 libraries.minecraft.net）；Maven 同坐标已缓存 .pom 时已自动保护主 .jar 不进负缓存",
+    configNegativeCacheTtlHint:
+      "防止上游瞬时 404 锁死构件（如 libraries.minecraft.net）；Maven 同坐标已缓存 .pom 时已自动保护主 .jar 不进负缓存",
     configNegativeCacheInherit: "继承全局设置",
     configNegativeCacheDisable: "关闭（0 秒，每次实时回源）",
     configNegativeCacheCustom: "自定义秒数",
@@ -2294,7 +2296,8 @@ export const zh = {
     updated: "出站代理已更新",
     deleted: "出站代理已删除",
     deleteTitle: "删除出站代理",
-    deleteConfirm: "确认删除出站代理「{{name}}」？若仍有 proxy 仓库挂载该代理，需先在仓库配置中解除绑定。",
+    deleteConfirm:
+      "确认删除出站代理「{{name}}」？若仍有 proxy 仓库挂载该代理，需先在仓库配置中解除绑定。",
     testTitle: "测试代理连通性：{{name}}",
     testTargetUrl: "测试目标 URL（公网 http/https 地址）",
     runTest: "发起测试",

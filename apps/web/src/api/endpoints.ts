@@ -2395,9 +2395,7 @@ export function listOutboundProxies(): Promise<OutboundProxyList> {
 }
 
 /** 新增全局出站代理（仅管理员；凭据/节点配置加密落库，响应只回显脱敏预览）。 */
-export function createOutboundProxy(
-  input: CreateOutboundProxyRequest,
-): Promise<OutboundProxy> {
+export function createOutboundProxy(input: CreateOutboundProxyRequest): Promise<OutboundProxy> {
   return request<OutboundProxy>("/outbound-proxies", {
     method: "POST",
     body: input,
@@ -2430,4 +2428,3 @@ export function testOutboundProxy(
     body: input,
   });
 }
-

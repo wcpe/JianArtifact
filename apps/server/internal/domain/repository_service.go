@@ -626,6 +626,13 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 				return ErrValidation
 			}
 		}
+		// 成环检测：group 允许嵌套 group，读路径会按成员递归下发回源。
+		// 若允许 A→B 与 B→A 共存，单个请求就会按分支因子在 16 层深度内指数放大
+		// （2-环约 2^16 个 goroutine 与同量级本地查询），构成可被配置触发的自我 DoS。
+		// 这里在写入侧拒绝，读路径另带 visited 兜底（防止历史脏数据）。
+		if err := s.validateGroupAcyclic(name, cfg.Members); err != nil {
+			return err
+		}
 	default:
 		// 未知类型交由持久化层的 CHECK 约束拒绝（返回后映射为内部错误）。
 	}
@@ -635,6 +642,61 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 func validateFormatType(format, typ string) error {
 	if format == "gomod" && typ != "proxy" {
 		return ErrValidation
+	}
+	return nil
+}
+
+// maxGroupMembershipDepth 限制 group 嵌套的可达深度，与读路径的 maxResolveDepth 对齐：
+// 写入侧若允许更深的结构，读路径会在超深处直接判「不存在」，把结构错误伪装成 404。
+const maxGroupMembershipDepth = maxResolveDepth
+
+// validateGroupAcyclic 判定「把 members 挂到名为 groupName 的 group 上」之后是否会形成环。
+//
+// 判定方式是沿 members 向下的现有多层 group 做 DFS，只要触及 groupName 本身就成环。
+// 之所以不能只看直接成员：A→B→C 之后再把 C 的成员加回 A 是合法的两步操作，
+// 只有沿成员链走到底才能发现。
+//
+// 未建成的仓库（成员名解析不到）不参与判定——它们在后续步骤里自己会被创建，
+// 且届时各自的 validateConfig 会重新校验，这里不抢先报错。
+func (s *RepositoryService) validateGroupAcyclic(groupName string, members []string) error {
+	// visited 记录本次已经展开过的 group，避免菱形成员结构被重复展开成指数遍历。
+	// 它不参与「是否成环」判定（那只由 groupName 本身命中决定），只做剪枝。
+	visited := map[string]bool{}
+	var walk func(name string, depth int) error
+	walk = func(name string, depth int) error {
+		if depth > maxGroupMembershipDepth {
+			return fmt.Errorf("%w: group 嵌套层级超过 %d 层", ErrValidation, maxGroupMembershipDepth)
+		}
+		// 命中调用者自身即闭环。
+		if name == groupName {
+			return fmt.Errorf("%w: group 成员存在循环引用", ErrValidation)
+		}
+		if visited[name] {
+			return nil
+		}
+		visited[name] = true
+		repo, err := s.repos.GetByName(name)
+		if err != nil || repo == nil || repo.Type != "group" {
+			return nil
+		}
+		cfg, decErr := repo.DecodeConfig()
+		if decErr != nil {
+			return nil
+		}
+		for _, child := range cfg.Members {
+			if child == "" {
+				continue
+			}
+			if err := walk(child, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, m := range members {
+		if err := walk(m, 1); err != nil {
+			return err
+		}
 	}
 	return nil
 }

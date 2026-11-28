@@ -217,4 +217,3 @@ export type CreateOutboundProxyRequest = Schemas["CreateOutboundProxyRequest"];
 export type UpdateOutboundProxyRequest = Schemas["UpdateOutboundProxyRequest"];
 export type TestOutboundProxyRequest = Schemas["TestOutboundProxyRequest"];
 export type TestOutboundProxyResult = Schemas["TestOutboundProxyResult"];
-

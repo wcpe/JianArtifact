@@ -173,12 +173,14 @@ func NewMavenHandler(raw *RawHandler) *MavenHandler {
 func (h *MavenHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
 	withCacheOutcome(c)
-	withNegativeCacheBypass(c)
 	withMavenResolveMemo(c)
 	defer h.markCacheResult(c, repoName)
 	if !h.authorize(c, repoName, "read") {
 		return
 	}
+	// 必须在鉴权之后：匿名请求不得凭一个请求头绕开负缓存（见 withNegativeCacheBypass）。
+	_, hasPrincipal := auth.PrincipalFrom(c)
+	withNegativeCacheBypass(c, hasPrincipal)
 	if h.tryBrowse(c) {
 		return
 	}

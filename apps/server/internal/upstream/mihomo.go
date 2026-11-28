@@ -107,12 +107,61 @@ func parseMihomoYAMLNode(raw string) (map[string]any, error) {
 	return doc, nil
 }
 
+// allowedMihomoNodeKeys 是允许透传进 mihomo proxies[0] 的节点字段白名单。
+//
+// 必须白名单而非原样拷贝：`proxies[0]` 的内容会直接进入 mihomo 运行配置，
+// 而 dialer-proxy / interface-name / routing-mark / tun 之类字段能改变进程的网络行为，
+// 甚至反向借用本机其它接口或代理组。本项目只承诺「把用户给的节点连出去」，
+// 不允许通过节点配置扩展出与产品语义无关的能力面。新增协议字段时同步维护此表。
+var allowedMihomoNodeKeys = map[string]bool{
+	"name":                  true,
+	"type":                  true,
+	"server":                true,
+	"port":                  true,
+	"uuid":                  true,
+	"password":              true,
+	"cipher":                true,
+	"alterId":               true,
+	"network":               true,
+	"tls":                   true,
+	"sni":                   true,
+	"servername":            true,
+	"alpn":                  true,
+	"skip-cert-verify":      true,
+	"fingerprint":           true,
+	"udp":                   true,
+	"flow":                  true,
+	"client-fingerprint":    true,
+	"reality-opts":          true,
+	"ws-opts":               true,
+	"grpc-opts":             true,
+	"h2-opts":               true,
+	"http-opts":             true,
+	"plugin":                true,
+	"plugin-opts":           true,
+	"obfs":                  true,
+	"obfs-password":         true,
+	"auth":                  true,
+	"up":                    true,
+	"down":                  true,
+	"ports":                 true,
+	"congestion-controller": true,
+	"udp-relay-mode":        true,
+	"reduce-rtt":            true,
+	"heartbeat-interval":    true,
+}
+
 func validateAndNormalizeMihomoNode(in map[string]any) (map[string]any, string, error) {
 	if len(in) == 0 {
 		return nil, "", errors.New("Mihomo 节点配置为空")
 	}
 	node := make(map[string]any, len(in)+1)
 	for k, v := range in {
+		if !allowedMihomoNodeKeys[k] {
+			// 静默丢弃而非报错：分享链接常夹带客户端专属字段（如 mihomo 自己导出的
+			// dialer-proxy），直接拒绝会让合法订阅无法导入，而保留又会扩权。
+			continue
+		}
 		node[k] = v
 	}
 	typ := strings.ToLower(strings.TrimSpace(asString(node["type"])))
@@ -125,7 +174,7 @@ func validateAndNormalizeMihomoNode(in map[string]any) (map[string]any, string, 
 	node["type"] = typ
 
 	server := strings.TrimSpace(asString(node["server"]))
-	if server == "" || strings.ContainsAny(server, " \t\r\n/@") {
+	if server == "" || !validMihomoServerHost(server) {
 		return nil, "", errors.New("Mihomo 节点缺少合法的 server 地址")
 	}
 	node["server"] = server
@@ -700,6 +749,26 @@ func decodeFlexibleBase64(s string) ([]byte, error) {
 		}
 	}
 	return nil, errors.New("base64 decode failed")
+}
+
+// validMihomoServerHost 校验节点 server 字段的字符合法性。
+//
+// 只接受主机名/IPv4/IPv6 字面量所需的字符：除了排除路径与 userinfo 分隔符，
+// 还必须拦住控制字符（\x00、\x1b 等）——该字段会进入 config.yaml 并出现在
+// 节点预览（endpointPreview）里，而预览会写进审计日志，控制字符可被用来做日志注入。
+func validMihomoServerHost(server string) bool {
+	if server == "" || len(server) > 255 {
+		return false
+	}
+	for _, r := range server {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-' || r == ':' || r == '_' || r == '[' || r == ']':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func asString(v any) string {

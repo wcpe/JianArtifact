@@ -103,7 +103,11 @@ func NewTestClient(timeout time.Duration) *Client {
 // 仅用于用户显式声明的可信内网站来源（如本机或内网 Nexus）：allowPrivate=true 会绕过
 // SSRF 私网地址校验，因此调用方必须确保该来源由用户在迁移任务中显式声明（allowPrivateSource），
 // 且绝不用于来自不可信输入的地址。生产默认使用 NewClient（allowPrivate=false）。
-// 注意：此开关只影响在线迁移回源，不影响代理回源（proxy 仓库远程地址）的安全校验。
+//
+// 注意：该开关对**本客户端自身**的两条出站分支都生效（直连与经出站代理）。
+// 但注入的代理解析器（SetProxyResolver）只在共享的 NewClient 实例上装配，
+// 迁移侧自建的 allowPrivate 实例没有解析器，因此不会走到代理分支——
+// 这是装配事实，不是本注释的语义保证；新增代理装配点时必须重新审视这条边界。
 func NewClientWithPolicy(timeout time.Duration, allowPrivate bool) *Client {
 	return newClient(timeout, allowPrivate, nil, nil)
 }
@@ -251,7 +255,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("%w: 请求为空", ErrUnsafeURL)
 	}
 	if proxyID := OutboundProxyIDFromContext(req.Context()); proxyID > 0 {
-		if err := c.policy.validateProxyTargetURL(req.URL); err != nil {
+		if err := c.policy.validateProxyTargetURL(req.Context(), req.URL); err != nil {
 			return nil, err
 		}
 		c.mu.RLock()

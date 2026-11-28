@@ -913,9 +913,7 @@ function ConfigTab({
                   { value: "custom", label: t("repoDetail.configNegativeCacheCustom") },
                 ]}
                 value={negCacheMode}
-                onChange={(v) =>
-                  v && setNegCacheMode(v as "inherit" | "disable" | "custom")
-                }
+                onChange={(v) => v && setNegCacheMode(v as "inherit" | "disable" | "custom")}
                 allowDeselect={false}
               />
               {negCacheMode === "custom" ? (
@@ -923,9 +921,7 @@ function ConfigTab({
                   label={t("repoDetail.configNegativeCacheCustomLabel")}
                   value={negCacheCustomText}
                   error={
-                    negCacheCustomInvalid
-                      ? t("repoDetail.configNegativeCacheInvalid")
-                      : undefined
+                    negCacheCustomInvalid ? t("repoDetail.configNegativeCacheInvalid") : undefined
                   }
                   onChange={(e) => setNegCacheCustomText(e.currentTarget.value)}
                 />

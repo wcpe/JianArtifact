@@ -218,7 +218,16 @@ func withCacheOutcome(c *gin.Context) {
 
 // withNegativeCacheBypass 尊重客户端显式强刷信号（Cache-Control: no-cache / max-age=0 或 Pragma: no-cache），
 // 让 Gradle --refresh-dependencies / mvn -U 等强制重验请求穿透 404 负缓存直连上游。
-func withNegativeCacheBypass(c *gin.Context) {
+//
+// 只在**已认证主体**上生效（调用方传入是否已认证）：该头零成本、可任意构造，
+// 而制品读路径没有独立限流；若匿名请求也能触发，任何对不同 path 反复带该头的客户端
+// 都能让每次读穿透 group 全部成员回源，把负缓存这道唯一的减速带关掉。
+// 匿名读仍按普通路径走负缓存，行为与未接入本特性时一致。
+// 调用顺序因此固定为「先鉴权、再调用本函数」，不能提前到 authorize 之前。
+func withNegativeCacheBypass(c *gin.Context, authenticated bool) {
+	if !authenticated {
+		return
+	}
 	cc := strings.ToLower(c.GetHeader("Cache-Control"))
 	pragma := strings.ToLower(c.GetHeader("Pragma"))
 	if strings.Contains(cc, "no-cache") || strings.Contains(cc, "max-age=0") || strings.Contains(pragma, "no-cache") {
@@ -245,11 +254,13 @@ func (h *RawHandler) markCacheResult(c *gin.Context, repoName string) {
 func (h *RawHandler) Get(c *gin.Context) {
 	repo := c.Param("repo")
 	withCacheOutcome(c)
-	withNegativeCacheBypass(c)
 	defer h.markCacheResult(c, repo)
 	if !h.authorize(c, repo, "read") {
 		return
 	}
+	// 必须在鉴权之后：匿名请求不得凭一个请求头绕开负缓存（见 withNegativeCacheBypass）。
+	_, hasPrincipal := auth.PrincipalFrom(c)
+	withNegativeCacheBypass(c, hasPrincipal)
 	if h.tryBrowse(c) {
 		return
 	}

@@ -376,7 +376,9 @@ export function RepositoriesPage() {
   const outboundProxiesState = useAsync(
     () => (canManage && createOpened ? listOutboundProxies() : Promise.resolve(null)),
     [canManage, createOpened],
-    { cacheKey: canManage && createOpened ? `repositories:outbound-proxies:${user?.id}` : undefined },
+    {
+      cacheKey: canManage && createOpened ? `repositories:outbound-proxies:${user?.id}` : undefined,
+    },
   );
   const outboundProxyOptions = useMemo(() => {
     const base = [{ value: "0", label: t("repoDetail.configOutboundProxyDirect") }];
@@ -1447,8 +1449,7 @@ export function RepositoriesPage() {
                 ]}
                 value={form.values.negCacheMode}
                 onChange={(v) =>
-                  v &&
-                  form.setFieldValue("negCacheMode", v as "inherit" | "disable" | "custom")
+                  v && form.setFieldValue("negCacheMode", v as "inherit" | "disable" | "custom")
                 }
                 allowDeselect={false}
               />

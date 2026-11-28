@@ -9452,7 +9452,18 @@ components:
       description: 出站代理协议类型（http=HTTP/HTTPS 代理，socks5=SOCKS5/SOCKS5H 代理，mihomo=托管 Mihomo 节点协议）
     OutboundProxy:
       type: object
-      required: [id, name, kind, description, endpointPreview, enabled, boundRepositories, createdAt, updatedAt]
+      required:
+        [
+          id,
+          name,
+          kind,
+          description,
+          endpointPreview,
+          enabled,
+          boundRepositories,
+          createdAt,
+          updatedAt,
+        ]
       additionalProperties: false
       properties:
         id:
@@ -9564,4 +9575,3 @@ components:
           format: int64
         message:
           type: string
-

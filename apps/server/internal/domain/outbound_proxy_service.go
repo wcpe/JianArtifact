@@ -151,17 +151,23 @@ func (s *OutboundProxyService) Get(id int64) (*OutboundProxyView, error) {
 	return &view, nil
 }
 
-// Exists 检查出站代理 ID 是否存在（供 RepositoryService 校验引用合法性）。
+// Exists 检查出站代理 ID 是否存在且处于启用状态（供 RepositoryService 校验引用合法性）。
+//
+// 同时看 enabled：绑定一个已停用的代理在配置阶段就该被拒绝，
+// 否则配置保存成功、运行时该仓库的全部回源却 502，运维要跨两个页面才能定位。
 func (s *OutboundProxyService) Exists(id int64) (bool, error) {
 	if id <= 0 {
 		return false, nil
 	}
-	_, err := s.proxies.GetByID(id)
+	proxy, err := s.proxies.GetByID(id)
 	if errors.Is(err, repository.ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if !proxy.Enabled {
+		return false, fmt.Errorf("%w: 指定的出站代理已停用", ErrValidation)
 	}
 	return true, nil
 }
@@ -369,10 +375,14 @@ func (s *OutboundProxyService) TestConnectivity(ctx context.Context, proxyID int
 	status, probeErr := client.ProbeWithCredential(probeCtx, target, "")
 	latencyMs := time.Since(started).Milliseconds()
 	if probeErr != nil {
+		// 不回传原始错误文本：它可能内嵌 mihomo 子进程 stderr 的片段
+		// （启动期解析错误常回显 proxies[0].password 之类的配置行），
+		// 而本响应会把 Message 原样返给前端。这里按错误类别给固定文案，
+		// 具体原因留在服务端日志里排障。
 		return OutboundProxyTestResult{
 			OK:        false,
 			LatencyMs: latencyMs,
-			Message:   probeErr.Error(),
+			Message:   outboundProxyTestFailureMessage(probeErr),
 		}, nil
 	}
 	// 上游返回 2xx/3xx/4xx（如 S3/CloudFront 根路径常返回 403/404）均证明代理隧道已贯通目标上游。
@@ -387,6 +397,22 @@ func (s *OutboundProxyService) TestConnectivity(ctx context.Context, proxyID int
 		LatencyMs:  latencyMs,
 		Message:    msg,
 	}, nil
+}
+
+// outboundProxyTestFailureMessage 把连通性测试的失败归类成固定文案。
+// 刻意不使用 err.Error()：错误链里可能带上 mihomo 子进程的 stderr 片段，
+// 而该文案会原样出现在 API 响应中。
+func outboundProxyTestFailureMessage(err error) string {
+	switch {
+	case errors.Is(err, upstream.ErrProxyUnavailable):
+		return "出站代理不可用（未启用、已删除或受管 Mihomo 启动失败），请检查代理配置与服务端日志"
+	case errors.Is(err, upstream.ErrUnsafeURL):
+		return "测试目标地址被安全策略拒绝"
+	case errors.Is(err, upstream.ErrCredentialUnavailable):
+		return "代理凭据不可用，请检查凭据配置"
+	default:
+		return "经代理访问目标上游失败，请检查代理节点与目标地址（详细原因见服务端日志）"
+	}
 }
 
 // Close 释放所有缓存连接并终止全部受管 Mihomo 子进程（进程停机时调用）。

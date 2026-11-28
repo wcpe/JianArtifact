@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -184,6 +185,12 @@ func openServices(cfg *config.Config, opts ...serviceOption) (*appServices, erro
 	})
 	outboundProxyRepo := repository.NewOutboundProxyRepo(db)
 	mihomoMgr := upstream.NewMihomoManager(cfg.MihomoBin, cfg.DataDir)
+	// 启动期清扫上次运行遗留的 mihomo 工作目录（含明文节点配置）：
+	// 正常关停会删，但 SIGKILL/panic/断电会留下 config.yaml，且不在 storage-cleanup 的扫描范围内。
+	// 此刻本进程尚未启动任何子进程，目录里的内容一定不属于存活实例，删除是安全的。
+	if removed := mihomoMgr.CleanupStaleWorkDirs(); removed > 0 {
+		fmt.Fprintf(os.Stderr, "已清理 %d 个遗留的 mihomo 工作目录（含节点配置副本）。\n", removed)
+	}
 	outboundProxySvc, err := domain.NewOutboundProxyService(outboundProxyRepo, repoRepo, cfg.OutboundProxyKey, mihomoMgr)
 	if err != nil {
 		_ = db.Close()

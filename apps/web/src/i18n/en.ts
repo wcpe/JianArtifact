@@ -1334,10 +1334,12 @@ export const en = {
     configCacheRetentionValue: "= keep for {{days}} days",
     configCacheRetentionOff: "Disabled (0 days = no automatic cleanup)",
     configOutboundProxy: "Outbound Proxy",
-    configOutboundProxyHint: "Applies only to this proxy repository; when attached, all upstream fetches and probes route through it (HTTP / SOCKS5 / Mihomo)",
+    configOutboundProxyHint:
+      "Applies only to this proxy repository; when attached, all upstream fetches and probes route through it (HTTP / SOCKS5 / Mihomo)",
     configOutboundProxyDirect: "Direct (no proxy)",
     configNegativeCacheTtl: "404 Negative Cache Policy",
-    configNegativeCacheTtlHint: "Prevents transient upstream 404 lock-in (e.g. libraries.minecraft.net); Maven primary JARs with a cached sibling POM are automatically protected",
+    configNegativeCacheTtlHint:
+      "Prevents transient upstream 404 lock-in (e.g. libraries.minecraft.net); Maven primary JARs with a cached sibling POM are automatically protected",
     configNegativeCacheInherit: "Inherit global setting",
     configNegativeCacheDisable: "Disabled (0s, always check upstream)",
     configNegativeCacheCustom: "Custom TTL (seconds)",
@@ -2411,7 +2413,8 @@ export const en = {
     description:
       "Manage named outbound proxies that can be attached per proxy repository. Supports HTTP/HTTPS, SOCKS5/SOCKS5H, and managed Mihomo nodes (VLESS/VMess/Trojan/SS/Hysteria2/TUIC/AnyTLS). Credentials and node configs are sealed with AES-256-GCM at rest.",
     add: "Add Proxy",
-    empty: "No outbound proxies configured yet. Add one here, then attach it to any proxy repository.",
+    empty:
+      "No outbound proxies configured yet. Add one here, then attach it to any proxy repository.",
     loadFailed: "Failed to load outbound proxies",
     mihomoAvailable: "Mihomo runtime ready: {{version}}",
     mihomoUnavailable: "Mihomo binary not detected",
@@ -2438,7 +2441,8 @@ export const en = {
     fieldConfigEditHint:
       "Current sealed preview: {{preview}}. Leave blank to keep the existing secret unless changing protocol kind.",
     fieldDescription: "Description (optional)",
-    fieldDescriptionPlaceholder: "e.g. Outbound tunnel for libraries.minecraft.net and overseas Maven repos",
+    fieldDescriptionPlaceholder:
+      "e.g. Outbound tunnel for libraries.minecraft.net and overseas Maven repos",
     fieldEnabled: "Enable this outbound proxy",
     nameRequired: "Proxy name is required",
     configRequired: "Proxy URL or Mihomo node config is required",
@@ -2448,7 +2452,7 @@ export const en = {
     deleted: "Outbound proxy deleted",
     deleteTitle: "Delete Outbound Proxy",
     deleteConfirm:
-      "Delete outbound proxy \"{{name}}\"? Detach it from any bound proxy repositories first.",
+      'Delete outbound proxy "{{name}}"? Detach it from any bound proxy repositories first.',
     testTitle: "Test Connectivity: {{name}}",
     testTargetUrl: "Target URL (public http/https URL)",
     runTest: "Run Test",

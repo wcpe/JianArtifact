@@ -33,11 +33,7 @@ import {
   testOutboundProxy,
   updateOutboundProxy,
 } from "../../api/endpoints";
-import type {
-  OutboundProxy,
-  OutboundProxyKind,
-  TestOutboundProxyResult,
-} from "../../api/types";
+import type { OutboundProxy, OutboundProxyKind, TestOutboundProxyResult } from "../../api/types";
 import { OpsSection } from "../ops/OpsKit";
 import { useAsync } from "../../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
@@ -137,9 +133,7 @@ export function OutboundProxiesSection() {
 
     req
       .then(() => {
-        notifySuccess(
-          editing ? t("outboundProxies.updated") : t("outboundProxies.created"),
-        );
+        notifySuccess(editing ? t("outboundProxies.updated") : t("outboundProxies.created"));
         setModalOpen(false);
         state.reload();
       })
@@ -275,9 +269,7 @@ export function OutboundProxiesSection() {
                   </Table.Td>
                   <Table.Td>
                     <Badge size="xs" variant="dot" color={item.enabled ? "teal" : "gray"}>
-                      {item.enabled
-                        ? t("outboundProxies.enabled")
-                        : t("outboundProxies.disabled")}
+                      {item.enabled ? t("outboundProxies.enabled") : t("outboundProxies.disabled")}
                     </Badge>
                   </Table.Td>
                   <Table.Td>
