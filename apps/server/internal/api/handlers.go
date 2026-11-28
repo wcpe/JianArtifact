@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -558,20 +559,64 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		// 若不加区分地回显，驱动原文（库名、表名、SQL 片段）就泄漏给了匿名用户——
 		// 这是可达的对外信息泄漏路径，不是理论风险。
 		//
-		// 因此：原始错误一律先写服务端日志（中文前缀，错误来自本系统的领域逻辑与驱动，
-		// 不含凭据）；响应体只对管理员附带细节，其余主体（含匿名）得到固定文案。
-		// 日志带上请求方法与路径，否则一句「内部错误：…」在日志里无法定位到端点。
+		// 因此：原始错误一律先写服务端日志（中文前缀），响应体只对管理员附带细节，
+		// 其余主体（含匿名）得到固定文案。日志带上请求方法与路径，否则一句
+		// 「内部错误：…」在日志里无法定位到端点。
+		//
+		// 日志文本必须经 redactErrorForLog 脱敏：错误来自本系统的领域逻辑与驱动，
+		// 而其中**确有可能**夹带凭据——出站代理的节点解析错误、上游 URL 解析错误
+		// 都会把含 userinfo 的地址或节点字段带进 err（如 `password: hunter2`）。
+		// 日志会落到 stdout / journald / 容器日志，属于会长期留存的位置。
 		var method, path string
 		if c.Request != nil {
 			method, path = c.Request.Method, c.Request.URL.Path
 		}
-		log.Printf("内部错误：%v（%s %s）", err, method, path)
+		log.Printf("内部错误：%s（%s %s）", redactErrorForLog(err), method, path)
 		if p, ok := auth.PrincipalFrom(c); ok && p != nil && p.IsAdmin() {
-			write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
+			write(http.StatusInternalServerError, "internal_error", "内部错误："+redactErrorForLog(err))
 			return
 		}
 		write(http.StatusInternalServerError, "internal_error", "内部错误")
 	}
+}
+
+// credentialHeaderPattern 匹配 `Authorization: Bearer <token>` / `Basic <b64>` 这类
+// 「键 + 认证方案 + 令牌」三段式。必须单独处理：通用键值正则会在空格处截断，
+// 只抹掉 scheme 而把真正的令牌留下——那等于没脱敏。
+var credentialHeaderPattern = regexp.MustCompile(
+	`(?i)\b(authorization|proxy-authorization)\b\s*[:=]\s*(basic|bearer|digest|token)?\s*[^\s,;}\]]+`,
+)
+
+// credentialLikePattern 匹配错误文本里「键: 值」形式的凭据字段。
+//
+// 覆盖本系统会出现的几种写法：YAML 的 `password: xxx`、JSON 的 `"password":"xxx"`。
+// 值的匹配刻意写得宽松（带引号整体、或到下一个分隔符为止），并在替换时把
+// 整个「键 + 值」压成「键: ***」。
+var credentialLikePattern = regexp.MustCompile(
+	`(?i)("?)\b(password|passwd|pwd|secret|token|uuid|pbk|auth)\b("?)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;}\]]+)`,
+)
+
+// urlUserinfoPattern 匹配 URL 里的 user:pass@ 段。
+var urlUserinfoPattern = regexp.MustCompile(`://[^/\s@:]+:[^/\s@]+@`)
+
+// redactErrorForLog 在错误文本进入日志或响应前抹掉疑似凭据。
+//
+// 为什么必须做：兜底分支会把 err 原文写进服务端日志与管理员响应，
+// 而出站代理（节点分享链接解析、URL userinfo）与上游地址解析都可能让凭据进入 err。
+// 这里做的是**保守脱敏**：宁可多抹掉一些诊断细节，也不让密钥落到日志里；
+// 需要完整上下文时按端点 + 服务端其它日志定位。
+// err 为 nil 时返回空串（log.Printf 的 %s 对 nil error 会 panic）。
+func redactErrorForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	msg = urlUserinfoPattern.ReplaceAllString(msg, "://***@")
+	// 先处理三段式认证头，再处理通用键值：反过来通用正则会把
+	// `Authorization: Bearer <token>` 截成 `Authorization: *** <token>`。
+	msg = credentialHeaderPattern.ReplaceAllString(msg, "$1: ***")
+	msg = credentialLikePattern.ReplaceAllString(msg, "$1$2$3: ***")
+	return msg
 }
 
 // bindJSON 解析请求体；失败写 400 并返回 false。
